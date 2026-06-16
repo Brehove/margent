@@ -1,0 +1,3 @@
+name: margent
+description: Manage Margent threaded Markdown review workspaces through the margent CLI and MCP server.
+entrypoint: SKILL.md

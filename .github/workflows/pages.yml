@@ -5,6 +5,7 @@ on:
     branches: ["main"]
     paths:
       - "site/**"
+      - "docs/agent-setup.md"
       - "docs/assets/margent-app.png"
       - ".github/workflows/pages.yml"
   workflow_dispatch:

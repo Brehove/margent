@@ -25,12 +25,7 @@ The updater public key is committed in `src-tauri/tauri.conf.json`. The matching
    git push origin v0.1.0
    ```
 
-3. The `Release` workflow builds the macOS app, signs and notarizes it with the Apple secrets, publishes GitHub Release assets, emits Tauri updater metadata as `latest.json`, and uploads the CLI archive.
-   The workflow also uploads a stable `Margent.dmg` asset so public pages can link to:
-
-   ```text
-   https://github.com/Brehove/margent/releases/latest/download/Margent.dmg
-   ```
+3. The `Release` workflow builds the macOS app, signs and notarizes it with the Apple secrets, publishes GitHub Release assets, emits Tauri updater metadata as `latest.json`, and uploads the CLI archive. Public onboarding should still point users to the agent setup flow first.
 
 4. On a clean macOS account, install the downloaded app and run:
 
