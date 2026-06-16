@@ -1,0 +1,20 @@
+{
+  "schemaVersion": 1,
+  "id": "doc_b335630551682c19",
+  "relativePath": "README.md",
+  "displayName": "README.md",
+  "createdAt": "2026-03-17T10:00:00Z",
+  "updatedAt": "2026-03-17T10:00:00Z",
+  "currentContentHash": "sha256:002fd150fbd19ca2cc093db04ed872715b6c562f23cce2c27fa9de7d04c8c1e5",
+  "lastKnownLineEnding": "lf",
+  "frontmatterMode": "none",
+  "wordCount": 131,
+  "headingIndex": [
+    { "level": 1, "text": "Sample Project", "line": 1 },
+    { "level": 2, "text": "Overview", "line": 5 },
+    { "level": 2, "text": "Features", "line": 9 },
+    { "level": 3, "text": "Thread Anchoring", "line": 13 },
+    { "level": 3, "text": "External Editing", "line": 17 },
+    { "level": 2, "text": "Conclusion", "line": 21 }
+  ]
+}

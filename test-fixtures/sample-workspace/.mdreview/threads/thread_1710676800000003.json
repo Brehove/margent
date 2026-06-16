@@ -1,0 +1,33 @@
+{
+  "schemaVersion": 1,
+  "id": "thread_1710676800000003",
+  "documentId": "doc_7af86eac4f1b0da2",
+  "status": "open",
+  "createdAt": "2026-03-17T13:00:00Z",
+  "updatedAt": "2026-03-17T13:00:00Z",
+  "anchor": {
+    "state": "attached",
+    "confidence": 1.0,
+    "quotedText": "strong correlation between input parameters",
+    "startOffset": 550,
+    "endOffset": 593,
+    "startLine": 19,
+    "startColumn": 24,
+    "endLine": 19,
+    "endColumn": 67,
+    "prefixContext": "t laborum.\n\n### Results\n\nThe results indicate a ",
+    "suffixContext": " and observed outcomes. Further investigation is",
+    "headingPath": ["Draft Chapter", "Analysis", "Results"],
+    "blockFingerprint": "sha256:0dbf390bcaa7d3d6e6d1232444753377b32eaf1dc30a63f4d2896ae6026d889e",
+    "baseContentHash": "sha256:f0848a9460098e740144877f7dd2e01cc6ac2232d122402890ecf75316bbc464"
+  },
+  "messages": [
+    {
+      "id": "msg_1710676800000003_01",
+      "role": "user",
+      "author": "tester",
+      "body": "Can you quantify the correlation? A coefficient or p-value would strengthen this claim.",
+      "createdAt": "2026-03-17T13:00:00Z"
+    }
+  ]
+}

@@ -1,0 +1,45 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/Brehove/margent/docs/schemas/document.schema.json",
+  "title": "Margent Document Record",
+  "type": "object",
+  "required": [
+    "schemaVersion",
+    "id",
+    "relativePath",
+    "displayName",
+    "createdAt",
+    "updatedAt",
+    "currentContentHash",
+    "lastKnownLineEnding",
+    "frontmatterMode",
+    "wordCount",
+    "headingIndex"
+  ],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "id": { "type": "string", "minLength": 1 },
+    "relativePath": { "type": "string", "minLength": 1 },
+    "displayName": { "type": "string" },
+    "createdAt": { "type": "string", "format": "date-time" },
+    "updatedAt": { "type": "string", "format": "date-time" },
+    "currentContentHash": { "type": "string", "pattern": "^sha256:" },
+    "lastKnownLineEnding": { "type": "string" },
+    "frontmatterMode": { "type": "string" },
+    "wordCount": { "type": "integer", "minimum": 0 },
+    "headingIndex": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["depth", "text", "line"],
+        "properties": {
+          "depth": { "type": "integer", "minimum": 1, "maximum": 6 },
+          "text": { "type": "string" },
+          "line": { "type": "integer", "minimum": 1 }
+        }
+      }
+    }
+  },
+  "additionalProperties": true
+}
+

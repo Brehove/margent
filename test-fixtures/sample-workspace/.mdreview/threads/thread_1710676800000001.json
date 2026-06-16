@@ -1,0 +1,33 @@
+{
+  "schemaVersion": 1,
+  "id": "thread_1710676800000001",
+  "documentId": "doc_b335630551682c19",
+  "status": "open",
+  "createdAt": "2026-03-17T10:00:00Z",
+  "updatedAt": "2026-03-17T10:00:00Z",
+  "anchor": {
+    "state": "attached",
+    "confidence": 1.0,
+    "quotedText": "The quick brown fox jumps over the lazy dog.",
+    "startOffset": 99,
+    "endOffset": 143,
+    "startLine": 7,
+    "startColumn": 1,
+    "endLine": 7,
+    "endColumn": 45,
+    "prefixContext": "sting Margent's review workflows.\n\n## Overview\n\n",
+    "suffixContext": " This sentence is used throughout the test suite",
+    "headingPath": ["Sample Project", "Overview"],
+    "blockFingerprint": "sha256:a1efcc3bf8d2b773625469629ed7bd1781c5f592967e2fc6337e82ac8b29988c",
+    "baseContentHash": "sha256:002fd150fbd19ca2cc093db04ed872715b6c562f23cce2c27fa9de7d04c8c1e5"
+  },
+  "messages": [
+    {
+      "id": "msg_1710676800000001_01",
+      "role": "user",
+      "author": "tester",
+      "body": "This pangram is a great anchor target for tests. Consider highlighting it in the docs.",
+      "createdAt": "2026-03-17T10:00:00Z"
+    }
+  ]
+}

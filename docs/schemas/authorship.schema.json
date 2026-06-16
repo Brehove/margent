@@ -1,0 +1,42 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/Brehove/margent/docs/schemas/authorship.schema.json",
+  "title": "Margent Authorship Map Record",
+  "type": "object",
+  "required": ["schemaVersion", "documentId", "relativePath", "contentHash", "updatedAt", "spans"],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "documentId": { "type": "string", "minLength": 1 },
+    "relativePath": { "type": "string", "minLength": 1 },
+    "contentHash": { "type": "string", "pattern": "^sha256:" },
+    "updatedAt": { "type": "string", "format": "date-time" },
+    "spans": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "anchor", "quote", "source"],
+        "properties": {
+          "id": { "type": "string" },
+          "anchor": { "$ref": "thread.schema.json#/$defs/anchor" },
+          "quote": { "type": "string" },
+          "source": {
+            "type": "object",
+            "required": ["proposalId", "adapterId", "authorName", "acceptedAt", "editedAtAccept"],
+            "properties": {
+              "proposalId": { "type": "string" },
+              "adapterId": { "type": "string" },
+              "agentId": { "type": ["string", "null"] },
+              "authorName": { "type": "string" },
+              "acceptedAt": { "type": "string", "format": "date-time" },
+              "editedAtAccept": { "type": "boolean" }
+            },
+            "additionalProperties": true
+          }
+        },
+        "additionalProperties": true
+      }
+    }
+  },
+  "additionalProperties": true
+}
+

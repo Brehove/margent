@@ -1,0 +1,8 @@
+{"type":"thread.created","threadId":"thread_1710676800000001","documentId":"doc_b335630551682c19","timestamp":"2026-03-17T10:00:00Z"}
+{"type":"thread.message_added","threadId":"thread_1710676800000001","messageId":"msg_1710676800000001_01","timestamp":"2026-03-17T10:00:00Z"}
+{"type":"thread.created","threadId":"thread_1710676800000002","documentId":"doc_b335630551682c19","timestamp":"2026-03-17T11:00:00Z"}
+{"type":"thread.message_added","threadId":"thread_1710676800000002","messageId":"msg_1710676800000002_01","timestamp":"2026-03-17T11:00:00Z"}
+{"type":"thread.message_added","threadId":"thread_1710676800000002","messageId":"msg_1710676800000002_02","timestamp":"2026-03-17T12:00:00Z"}
+{"type":"thread.resolved","threadId":"thread_1710676800000002","timestamp":"2026-03-17T12:00:00Z"}
+{"type":"thread.created","threadId":"thread_1710676800000003","documentId":"doc_7af86eac4f1b0da2","timestamp":"2026-03-17T13:00:00Z"}
+{"type":"thread.message_added","threadId":"thread_1710676800000003","messageId":"msg_1710676800000003_01","timestamp":"2026-03-17T13:00:00Z"}

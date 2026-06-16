@@ -1,0 +1,41 @@
+{
+  "schemaVersion": 1,
+  "id": "thread_1710676800000002",
+  "documentId": "doc_b335630551682c19",
+  "status": "resolved",
+  "createdAt": "2026-03-17T11:00:00Z",
+  "updatedAt": "2026-03-17T12:00:00Z",
+  "resolvedAt": "2026-03-17T12:00:00Z",
+  "anchor": {
+    "state": "attached",
+    "confidence": 1.0,
+    "quotedText": "Anchors track the original quoted text",
+    "startOffset": 427,
+    "endOffset": 465,
+    "startLine": 15,
+    "startColumn": 1,
+    "endLine": 15,
+    "endColumn": 39,
+    "prefixContext": " CLI or the desktop app.\n\n### Thread Anchoring\n\n",
+    "suffixContext": ", surrounding context, heading path, and block f",
+    "headingPath": ["Sample Project", "Features", "Thread Anchoring"],
+    "blockFingerprint": "sha256:9bb43ee4b03041eb0e7c42be8c676c582229baa6c6c70d7f6f880ce56a0b95df",
+    "baseContentHash": "sha256:002fd150fbd19ca2cc093db04ed872715b6c562f23cce2c27fa9de7d04c8c1e5"
+  },
+  "messages": [
+    {
+      "id": "msg_1710676800000002_01",
+      "role": "user",
+      "author": "tester",
+      "body": "Should we add more detail about the cascade resolution algorithm here?",
+      "createdAt": "2026-03-17T11:00:00Z"
+    },
+    {
+      "id": "msg_1710676800000002_02",
+      "role": "user",
+      "author": "reviewer",
+      "body": "Good point. I've expanded the description in the technical spec. Resolving this thread.",
+      "createdAt": "2026-03-17T12:00:00Z"
+    }
+  ]
+}

@@ -1,0 +1,59 @@
+name: CI
+
+on:
+  push:
+    branches: ["main"]
+  pull_request:
+    branches: ["main"]
+  workflow_dispatch:
+
+jobs:
+  verify:
+    name: Verify Margent
+    runs-on: macos-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Run public hygiene guard
+        run: bash scripts/check-public-hygiene.sh
+
+      - name: Set up Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: "22"
+          cache: npm
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      - name: Build frontend
+        run: npm run build
+
+      - name: Run frontend tests
+        run: npm test
+
+      - name: Run core tests
+        run: cargo test --manifest-path crates/margent-core/Cargo.toml
+
+      - name: Lint core crate
+        run: cargo clippy --manifest-path crates/margent-core/Cargo.toml --all-targets
+
+      - name: Run CLI tests
+        run: cargo test --manifest-path cli/Cargo.toml
+
+      - name: Lint CLI crate
+        run: cargo clippy --manifest-path cli/Cargo.toml --all-targets
+
+      - name: Run Tauri tests
+        run: cargo test --manifest-path src-tauri/Cargo.toml
+
+      - name: Lint Tauri crate
+        run: cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets

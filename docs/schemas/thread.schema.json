@@ -1,0 +1,112 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/Brehove/margent/docs/schemas/thread.schema.json",
+  "title": "Margent Thread Record",
+  "type": "object",
+  "required": [
+    "schemaVersion",
+    "id",
+    "documentId",
+    "status",
+    "createdAt",
+    "updatedAt",
+    "createdBy",
+    "title",
+    "tags",
+    "anchor",
+    "messages",
+    "linkedProposalIds"
+  ],
+  "properties": {
+    "schemaVersion": { "const": 6 },
+    "id": { "type": "string", "minLength": 1 },
+    "documentId": { "type": "string", "minLength": 1 },
+    "status": { "type": "string", "enum": ["open", "resolved"] },
+    "createdAt": { "type": "string", "format": "date-time" },
+    "updatedAt": { "type": "string", "format": "date-time" },
+    "createdBy": { "type": "string" },
+    "title": { "type": "string" },
+    "tags": { "type": "array", "items": { "type": "string" } },
+    "anchor": { "$ref": "#/$defs/anchor" },
+    "createdContentHash": { "type": ["string", "null"] },
+    "lastReanchorContentHash": { "type": ["string", "null"] },
+    "reviewRound": { "type": ["string", "null"] },
+    "reviewDone": { "type": "boolean" },
+    "messages": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/message" }
+    },
+    "linkedProposalIds": { "type": "array", "items": { "type": "string" } },
+    "providerSessions": {
+      "type": "object",
+      "additionalProperties": { "type": "string" }
+    }
+  },
+  "$defs": {
+    "anchor": {
+      "type": "object",
+      "required": [
+        "quote",
+        "prefixContext",
+        "suffixContext",
+        "startOffsetUtf16",
+        "endOffsetUtf16",
+        "startLine",
+        "startColumn",
+        "endLine",
+        "endColumn",
+        "headingPath",
+        "blockFingerprint",
+        "baseContentHash",
+        "kind",
+        "state",
+        "confidence"
+      ],
+      "properties": {
+        "quote": { "type": "string" },
+        "prefixContext": { "type": "string" },
+        "suffixContext": { "type": "string" },
+        "startOffsetUtf16": { "type": "integer", "minimum": 0 },
+        "endOffsetUtf16": { "type": "integer", "minimum": 0 },
+        "startLine": { "type": "integer", "minimum": 1 },
+        "startColumn": { "type": "integer", "minimum": 1 },
+        "endLine": { "type": "integer", "minimum": 1 },
+        "endColumn": { "type": "integer", "minimum": 1 },
+        "headingPath": { "type": "array", "items": { "type": "string" } },
+        "blockFingerprint": { "type": "string" },
+        "baseContentHash": { "type": "string" },
+        "kind": { "type": "string" },
+        "footnote": {
+          "type": ["object", "null"],
+          "required": ["label", "occurrence"],
+          "properties": {
+            "label": { "type": "string" },
+            "occurrence": { "type": "integer", "minimum": 0 }
+          }
+        },
+        "state": { "type": "string", "enum": ["attached", "detached", "unresolved"] },
+        "confidence": { "type": "number", "minimum": 0, "maximum": 1 }
+      },
+      "additionalProperties": true
+    },
+    "message": {
+      "type": "object",
+      "required": ["id", "threadId", "authorType", "authorName", "createdAt", "body", "kind"],
+      "properties": {
+        "id": { "type": "string" },
+        "threadId": { "type": "string" },
+        "authorType": { "type": "string" },
+        "authorName": { "type": "string" },
+        "agentId": { "type": ["string", "null"] },
+        "adapterId": { "type": ["string", "null"] },
+        "replyToMessageId": { "type": ["string", "null"] },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "body": { "type": "string" },
+        "kind": { "type": "string" }
+      },
+      "additionalProperties": true
+    }
+  },
+  "additionalProperties": true
+}
+

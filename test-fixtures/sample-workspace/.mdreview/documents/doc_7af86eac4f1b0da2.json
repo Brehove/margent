@@ -1,0 +1,20 @@
+{
+  "schemaVersion": 1,
+  "id": "doc_7af86eac4f1b0da2",
+  "relativePath": "chapters/draft.md",
+  "displayName": "chapters/draft.md",
+  "createdAt": "2026-03-17T10:00:00Z",
+  "updatedAt": "2026-03-17T10:00:00Z",
+  "currentContentHash": "sha256:f0848a9460098e740144877f7dd2e01cc6ac2232d122402890ecf75316bbc464",
+  "lastKnownLineEnding": "lf",
+  "frontmatterMode": "none",
+  "wordCount": 112,
+  "headingIndex": [
+    { "level": 1, "text": "Draft Chapter", "line": 1 },
+    { "level": 2, "text": "Introduction", "line": 3 },
+    { "level": 2, "text": "Analysis", "line": 9 },
+    { "level": 3, "text": "Methodology", "line": 13 },
+    { "level": 3, "text": "Results", "line": 17 },
+    { "level": 2, "text": "Conclusion", "line": 21 }
+  ]
+}
