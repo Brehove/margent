@@ -18,6 +18,6 @@ margent-core = { path = "../crates/margent-core" }
 time = { version = "0.3", features = ["formatting", "parsing"] }
 tokio = { version = "1", features = ["macros", "net", "rt-multi-thread", "sync", "time"] }
 walkdir = "2"
-similar = "2"
+similar = "3"
 wait-timeout = "0.2"
 notify = "6"
