@@ -1,0 +1,85 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta
+      name="description"
+      content="Margent is a local-first macOS Markdown review app for anchored comments and agent-assisted revision."
+    />
+    <meta property="og:title" content="Margent" />
+    <meta
+      property="og:description"
+      content="A local-first macOS Markdown review app for anchored comments and agent-assisted revision."
+    />
+    <meta property="og:type" content="website" />
+    <meta property="og:image" content="assets/margent-app.png" />
+    <title>Margent - Markdown review for Mac</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <header class="topbar" aria-label="Margent site navigation">
+      <a class="brand" href="./" aria-label="Margent home">Margent</a>
+      <nav>
+        <a href="https://github.com/Brehove/margent">GitHub</a>
+        <a href="https://github.com/Brehove/margent/releases">Releases</a>
+      </nav>
+    </header>
+
+    <main>
+      <section class="hero" aria-labelledby="hero-title">
+        <div class="hero-copy">
+          <p class="eyebrow">Local-first Markdown review for Mac</p>
+          <h1 id="hero-title">Margent</h1>
+          <p class="lede">
+            Write in Markdown, anchor threaded comments to passages, and review
+            Codex or Claude suggestions without sending your workspace to a web app.
+          </p>
+          <div class="actions" aria-label="Primary actions">
+            <a
+              class="button primary"
+              data-download
+              href="https://github.com/Brehove/margent/releases/latest/download/Margent.dmg"
+            >
+              Download for Mac
+            </a>
+            <a class="button secondary" href="https://github.com/Brehove/margent">
+              View on GitHub
+            </a>
+          </div>
+          <p class="release-note" data-release-note>
+            Downloads are served from the latest GitHub Release.
+          </p>
+        </div>
+      </section>
+
+      <section class="summary" aria-label="Product summary">
+        <div>
+          <h2>Review Markdown where it already lives.</h2>
+          <p>
+            Margent keeps documents as ordinary files and stores review state in
+            local <code>.mdreview</code> sidecars. Your comments, proposals, and
+            provider replies stay beside the draft.
+          </p>
+        </div>
+        <div>
+          <h2>Built for agent-assisted editing.</h2>
+          <p>
+            Use Codex or Claude Code through your own installed CLIs. Margent
+            shows replies and revision proposals in the app while preserving the
+            source Markdown.
+          </p>
+        </div>
+      </section>
+    </main>
+
+    <footer>
+      <span>MIT licensed.</span>
+      <a href="https://github.com/Brehove/margent/blob/main/SECURITY.md">Security</a>
+      <a href="https://github.com/Brehove/margent/blob/main/docs/release.md">Release notes</a>
+    </footer>
+
+    <script src="script.js" defer></script>
+  </body>
+</html>
+
