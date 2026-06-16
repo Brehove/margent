@@ -1084,7 +1084,7 @@ pub fn accept_proposal(
         .map(str::to_string)
         .or_else(|| proposal.updated_document_text.clone())
         .ok_or_else(|| {
-            "Only updated-document proposals can be accepted in the current MVP.".to_string()
+            "Only updated-document proposals can be accepted in the current release.".to_string()
         })?;
     let snapshot = snapshot_document(
         root,

@@ -225,7 +225,7 @@ open -a Margent path/to/file.md
 
 ## Docs
 
-- [Product spec](docs/SPEC.md)
+- [Product spec](docs/product-spec.md)
 - [Acceptance checklist](docs/ACCEPTANCE.md)
 - [`.mdreview` sidecar spec](docs/mdreview-spec.md)
 - [Release and distribution](docs/release.md)

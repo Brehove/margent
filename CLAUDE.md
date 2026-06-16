@@ -10,7 +10,7 @@ Useful public docs:
 
 - `README.md`: setup, build, CLI, and usage overview
 - `docs/agent-setup.md`: agent-first installation guide
-- `docs/SPEC.md`: product behavior and MVP decisions
+- `docs/product-spec.md`: product behavior and design decisions
 - `docs/ACCEPTANCE.md`: user-facing acceptance criteria
 - `docs/mdreview-spec.md`: `.mdreview` sidecar layout and schema index
 - `docs/release.md`: release, signing, notarization, updater, and Homebrew notes

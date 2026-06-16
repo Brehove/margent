@@ -1,10 +1,10 @@
-# Markdown Comment App Spec
+# Margent Product Spec
 
 ## Product Summary
 
-Build a local-first macOS app for reviewing and revising Markdown documents with threaded comments and AI/CLI-assisted edits.
+Margent is a local-first macOS app for reviewing and revising Markdown documents with threaded comments and AI/CLI-assisted edits.
 
-The app should feel like a local version of Lex for Markdown files:
+The core experience:
 
 - open local `.md` files from disk
 - select text and attach threaded comments
@@ -87,7 +87,7 @@ Recommended implementation for v1:
 
 Why this is the better default:
 
-- a Lex-like comment pane and suggestion workflow are easier to build with mature web editor tooling
+- threaded comments, suggestion review, and source-linked editor interactions are easier to build with mature web editor tooling
 - diff rendering, threaded side panels, keyboard interactions, and inline decorations are easier in the web editor ecosystem
 - local desktop packaging and subprocess control are still strong with Tauri
 - the app remains a real local Mac app, not a hosted web product
@@ -96,13 +96,16 @@ Acceptable alternative:
 
 - SwiftUI/AppKit native app if native feel becomes more important than development speed
 
-Current recommendation:
+Current implementation:
 
-- prefer Tauri over SwiftUI for MVP
+- Tauri desktop shell
+- React UI
+- CodeMirror 6 editing surface
+- Rust host layer for filesystem access and provider subprocesses
 
 Reason:
 
-- your hardest problem is not macOS chrome, it is editor behavior plus comment and CLI orchestration
+- The hard product problem is editor behavior plus comment and CLI orchestration, not macOS chrome.
 
 ## User Experience
 
@@ -131,12 +134,15 @@ Three-pane layout:
 - Review mode: thread-focused view with inline comment markers and diff overlays
 - Preview mode: rendered Markdown preview, read-only in v1
 
-## UX Reference Direction
+## UX Direction
 
-The product should feel closer to:
+The product should prioritize:
 
-- Lex for comments, revision workflow, and AI collaboration
-- Scratch for local Markdown file browsing and file ownership
+- visible local file ownership
+- passage-level comments and revision proposals
+- rendered Markdown reading with source editing available
+- clear approval before any agent-authored change is applied
+- agent participation through CLI/provider surfaces without hiding provenance
 
 It should feel less like:
 
@@ -144,7 +150,7 @@ It should feel less like:
 - a code IDE with comments bolted on
 - a pure note-taking app
 
-## MVP UX Constraint
+## Anchoring Constraint
 
 In v1, comments are anchored to source text in the Markdown editor, not to the rendered preview DOM.
 
@@ -548,11 +554,11 @@ Why this matters:
 - it cleanly separates UI actions from storage
 - it cleanly separates storage from CLI backends
 - it makes future automation, scripting, and multi-agent workflows easier
-- it gives the app a more Lex-like collaboration model than a simple "run prompt, replace file" model
+- it gives the app a durable review model rather than a simple "run prompt, replace file" model
 
-## Scratch-Like File Model
+## Local File Model
 
-The app should preserve one of Scratch's best qualities:
+The app should preserve direct file ownership:
 
 - local file ownership stays obvious
 - file browsing feels lightweight
@@ -692,7 +698,7 @@ The app should accept any of these response modes:
 - `unified_diff`
 - `edit_operations`
 
-Preferred MVP mode:
+Preferred initial mode:
 
 - `updated_document`
 
@@ -904,7 +910,7 @@ Include Markdown fixtures for:
 
 Duplicate text fixtures are important for anchor confidence testing.
 
-## MVP Scope
+## Initial Scope
 
 ## Must Have
 
@@ -950,7 +956,7 @@ Duplicate text fixtures are important for anchor confidence testing.
 - How much fuzzy anchor recovery is acceptable before user trust drops?
 - Should proposal review support partial acceptance in v1, or whole-proposal only?
 
-## Recommended MVP Decisions
+## Recommended Initial Decisions
 
 - Open both folders and single files, but normalize both into a workspace root
 - Require explicit accept or reject on every proposal
