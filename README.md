@@ -4,6 +4,8 @@ Margent is a local-first macOS Markdown review app: write in a rendered-first Co
 
 ![Margent desktop screenshot](docs/assets/margent-app.png)
 
+[Website](https://brehove.github.io/margent/) · [Download for Mac](https://github.com/Brehove/margent/releases/latest/download/Margent.dmg) · [Latest release](https://github.com/Brehove/margent/releases/latest)
+
 ## Status
 
 Margent is early, macOS-first software. The desktop app, CLI, sidecar schema, exports, provider actions, and updater workflow are actively evolving, but the repository is organized so user documents and review sidecars stay local-first.

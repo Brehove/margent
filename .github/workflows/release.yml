@@ -23,6 +23,7 @@ jobs:
     env:
       RELEASE_TAG: ${{ github.ref_type == 'tag' && github.ref_name || format('v{0}', inputs.version) }}
       CLI_ARCHIVE: margent-cli-aarch64-apple-darwin.tar.gz
+      MAC_DMG: Margent.dmg
 
     steps:
       - name: Check out repository
@@ -67,9 +68,21 @@ jobs:
           releaseDraft: false
           prerelease: false
 
+      - name: Upload stable Mac download asset
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          dmg_path="$(find src-tauri/target/release/bundle/dmg -name '*.dmg' -print -quit)"
+          if [ -z "$dmg_path" ]; then
+            echo "No signed dmg found under src-tauri/target/release/bundle/dmg" >&2
+            exit 1
+          fi
+          cp "$dmg_path" "$MAC_DMG"
+          shasum -a 256 "$MAC_DMG" > "$MAC_DMG.sha256"
+          gh release upload "$RELEASE_TAG" "$MAC_DMG" "$MAC_DMG.sha256" --clobber
+
       - name: Upload CLI archive to release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           gh release upload "$RELEASE_TAG" "$CLI_ARCHIVE" "$CLI_ARCHIVE.sha256" --clobber
-
