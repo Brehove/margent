@@ -14,6 +14,42 @@ authentication must be initiated by the user through the provider's own CLI.
 Never ask the user to paste API keys, OAuth tokens, Keychain values, or provider
 secrets into chat.
 
+## Claude Code-Only Path
+
+Use this path when the user says they only want Claude Code. Do not require
+Codex for this setup.
+
+```sh
+git clone https://github.com/Brehove/margent.git
+cd margent
+npm ci
+npm run build
+cargo test --manifest-path cli/Cargo.toml
+cargo install --locked --path cli
+margent install --agent-skills
+osascript -e 'quit app "Margent"' 2>/dev/null || true
+npm run tauri build
+mkdir -p ~/Applications
+ditto src-tauri/target/release/bundle/macos/Margent.app ~/Applications/Margent.app
+open ~/Applications/Margent.app
+claude auth login
+```
+
+Then initialize each Markdown writing workspace:
+
+```sh
+cd /path/to/markdown-workspace
+margent init --write-config
+claude mcp add margent -- margent mcp --workspace "$PWD"
+margent doctor
+```
+
+`margent install --agent-skills` installs the shared Margent skill into
+`~/.claude/skills/margent`. `margent init --write-config` writes `CLAUDE.md`,
+`AGENTS.md`, `.mcp.json`, `.codex/config.toml`, `.mdreview/`, review passes, and
+the workspace-local skill copy. Claude Code users can ignore the Codex config
+unless they later decide to use Codex too.
+
 ## What To Do
 
 1. Confirm the user is on macOS.
@@ -53,29 +89,39 @@ secrets into chat.
    already exists, leave it untouched unless the user explicitly approves
    `margent install --agent-skills --force`.
 
-6. Build or run the desktop app:
+6. Install the desktop app into `~/Applications`:
+
+   ```sh
+   osascript -e 'quit app "Margent"' 2>/dev/null || true
+   npm run tauri build
+   mkdir -p ~/Applications
+   ditto src-tauri/target/release/bundle/macos/Margent.app ~/Applications/Margent.app
+   open ~/Applications/Margent.app
+   ```
+
+   Use `ditto`, not `cp -R`, because it preserves app bundle metadata more
+   reliably. This is a local build intended for the Mac that built it. It is
+   not the same as a signed and notarized public distribution artifact. To
+   update Margent from source, rerun the build and `ditto` steps.
+
+   For development iteration, run the app from Tauri instead of installing it:
 
    ```sh
    npm run tauri dev
    ```
 
-   For a release-style local app build:
-
-   ```sh
-   npm run tauri build
-   open src-tauri/target/release/bundle/macos/Margent.app
-   ```
-
-7. Check provider readiness:
+7. Check provider readiness. If the user wants Claude Code only, check Claude
+   Code only. If the user wants Codex only, check Codex only. If they want both
+   or have not decided, check both:
 
    ```sh
    codex login status
    claude auth status
    ```
 
-   If either provider is missing, send the user to the provider's official
-   install docs. If either provider is installed but not authenticated, ask the
-   user to initiate the provider login:
+   If the requested provider is missing, send the user to the provider's
+   official install docs. If the requested provider is installed but not
+   authenticated, ask the user to initiate the provider login:
 
    ```sh
    codex login
@@ -89,6 +135,12 @@ secrets into chat.
 
    ```text
    Should Margent default to Codex, Claude Code, or ask each time?
+   ```
+
+   For Claude Code-only installs, ask:
+
+   ```text
+   Should Margent always use Claude Code, or ask each time?
    ```
 
 9. Open a sample Markdown workspace and demonstrate one round trip:

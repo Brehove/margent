@@ -36,7 +36,7 @@ If the workspace has not been initialized:
 margent init --write-config
 ```
 
-That creates `.mdreview/`, review pass templates, workspace-local agent instructions, and MCP registration snippets for Claude Code and Codex.
+That creates `.mdreview/`, review pass templates, workspace-local `CLAUDE.md` and `AGENTS.md` instructions, and MCP registration snippets for Claude Code and Codex.
 
 ## Common Workflows
 
@@ -108,6 +108,7 @@ margent open <document.md> --thread <thread_id>
 
 - `margent codex ...` calls the user's installed Codex CLI.
 - `margent claude ...` calls the user's installed Claude Code CLI.
+- If you are running inside Claude Code, prefer `margent claude ...` for provider-backed replies and revisions. Codex examples are for Codex sessions or for users who explicitly ask to route work through Codex.
 - Margent does not manage provider accounts. If provider auth is missing, tell the user to run the provider's own login command and complete the browser or OAuth step themselves.
 - `feedback` writes an agent reply into the thread. `revise` creates a proposal unless `--apply` is explicitly used.
 
