@@ -58,7 +58,7 @@ export function createFootnoteHeavyScenario(noteCount = 120): PerfScenario {
   for (let index = 0; index < noteCount; index += 1) {
     const label = `n${index + 1}`;
     const referenceToken = `[^${label}]`;
-    const paragraph = `Footnote paragraph ${String(index + 1).padStart(3, "0")} references Scratch${referenceToken} and keeps enough body text around the reference for context-based resolution checks.`;
+    const paragraph = `Footnote paragraph ${String(index + 1).padStart(3, "0")} references note${referenceToken} and keeps enough body text around the reference for context-based resolution checks.`;
     const localStart = paragraph.indexOf(referenceToken);
 
     lines.push(paragraph, "");

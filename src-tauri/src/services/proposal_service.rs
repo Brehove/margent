@@ -151,7 +151,7 @@ pub fn accept_proposal(
     let updated_document_text = edited_document_text
         .or_else(|| proposal.updated_document_text.clone())
         .ok_or_else(|| {
-            "Only updated-document proposals can be accepted in the current MVP.".to_string()
+            "Only updated-document proposals can be accepted in the current release.".to_string()
         })?;
     let document = workspace_service::save_document(
         workspace_root,
