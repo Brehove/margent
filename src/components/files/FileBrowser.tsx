@@ -54,6 +54,12 @@ export const FileBrowser = memo(function FileBrowser({
   const [deleteCandidate, setDeleteCandidate] = useState<string | null>(null);
   const [draftAction, setDraftAction] = useState<DraftAction | null>(null);
   const draftInputRef = useRef<HTMLInputElement | null>(null);
+  const draftActionFocusKey =
+    draftAction?.kind === "rename"
+      ? `rename:${draftAction.fromRelativePath}`
+      : draftAction?.kind === "create"
+        ? "create"
+        : null;
 
   useEffect(() => {
     if (!actionRequest) {
@@ -86,13 +92,13 @@ export const FileBrowser = memo(function FileBrowser({
   }, [actionRequest]);
 
   useEffect(() => {
-    if (!draftAction || !draftInputRef.current) {
+    if (!draftActionFocusKey || !draftInputRef.current) {
       return;
     }
 
     draftInputRef.current.focus();
     draftInputRef.current.select();
-  }, [draftAction]);
+  }, [draftActionFocusKey]);
 
   if (isCollapsed) {
     return (
