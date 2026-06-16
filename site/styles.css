@@ -26,6 +26,7 @@
   --faint: rgba(38, 37, 30, 0.14);
   --accent: #a9472d;
   --accent-soft: rgba(169, 71, 45, 0.09);
+  --agentic-bg: url("assets/margent-agentic-margin-background.webp");
   --measure: 44rem;
   --wide: 74rem;
   font-family:
@@ -127,6 +128,14 @@ nav a:hover {
   min-height: calc(100svh - 58px);
   display: flex;
   align-items: center;
+  background:
+    linear-gradient(
+      90deg,
+      rgba(245, 242, 234, 0.96) 0%,
+      rgba(245, 242, 234, 0.88) 48%,
+      rgba(245, 242, 234, 0.54) 100%
+    ),
+    var(--agentic-bg) right center / cover no-repeat;
 }
 
 .eyebrow {
@@ -228,6 +237,16 @@ h2 {
 .sample-section,
 .open-section {
   border-top: 1px solid var(--faint);
+}
+
+.open-section {
+  background:
+    linear-gradient(
+      180deg,
+      rgba(245, 242, 234, 0.94) 0%,
+      rgba(245, 242, 234, 0.76) 100%
+    ),
+    var(--agentic-bg) right bottom / cover no-repeat;
 }
 
 .prompt-grid {
@@ -420,6 +439,13 @@ footer {
   gap: 18px;
   padding: 70px 20px 46px;
   border-top: 1px solid var(--faint);
+  background:
+    linear-gradient(
+      180deg,
+      rgba(245, 242, 234, 0.92) 0%,
+      rgba(245, 242, 234, 0.88) 100%
+    ),
+    var(--agentic-bg) right bottom / cover no-repeat;
   color: var(--muted);
   text-align: center;
 }
