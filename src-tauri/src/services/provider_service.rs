@@ -132,6 +132,7 @@ pub fn run_provider_thread_action(
     run_provider_thread_action_with_stream(
         workspace_root,
         document_id,
+        None,
         thread_id,
         provider,
         action,
@@ -147,6 +148,7 @@ pub fn run_provider_thread_action(
 pub fn run_provider_thread_action_with_stream(
     workspace_root: &str,
     document_id: &str,
+    document_relative_path: Option<&str>,
     thread_id: &str,
     provider: ThreadProvider,
     action: ProviderThreadAction,
@@ -158,10 +160,17 @@ pub fn run_provider_thread_action_with_stream(
 ) -> Result<ProviderThreadActionResult, String> {
     let root_path = Path::new(workspace_root);
     let (document_record, _document_path, document_content) =
-        load_document_context(root_path, document_id)?;
+        load_document_context(root_path, document_id, document_relative_path)?;
     let mut thread = thread_service::load_thread_record(root_path, thread_id)?;
 
-    if thread.document_id != document_id {
+    if thread.document_id != document_record.id
+        && !retarget_thread_to_document_if_anchor_matches(
+            root_path,
+            &document_record,
+            &document_content,
+            &mut thread,
+        )?
+    {
         return Err(format!(
             "Thread {thread_id} does not belong to document {}.",
             document_record.relative_path
@@ -390,6 +399,7 @@ pub fn run_provider_document_action(
     run_provider_document_action_with_stream(
         workspace_root,
         document_id,
+        None,
         provider,
         action,
         instruction,
@@ -404,6 +414,7 @@ pub fn run_provider_document_action(
 pub fn run_provider_document_action_with_stream(
     workspace_root: &str,
     document_id: &str,
+    document_relative_path: Option<&str>,
     provider: ThreadProvider,
     action: ProviderDocumentAction,
     instruction: &str,
@@ -419,7 +430,7 @@ pub fn run_provider_document_action_with_stream(
 
     let root_path = Path::new(workspace_root);
     let (document_record, _document_path, document_content) =
-        load_document_context(root_path, document_id)?;
+        load_document_context(root_path, document_id, document_relative_path)?;
 
     match action {
         ProviderDocumentAction::Feedback => {
@@ -517,9 +528,11 @@ pub fn run_provider_document_action_with_stream(
 fn load_document_context(
     workspace_root: &Path,
     document_id: &str,
+    document_relative_path: Option<&str>,
 ) -> Result<(DocumentRecord, PathBuf, String), String> {
     let mdreview_path = file_service::ensure_workspace_layout(workspace_root)?;
     let documents_dir = mdreview_path.join("documents");
+    let mut fallback_by_relative_path = None;
 
     for entry in fs::read_dir(&documents_dir)
         .map_err(|error| format!("Unable to read {}: {error}", documents_dir.display()))?
@@ -536,19 +549,83 @@ fn load_document_context(
             continue;
         };
 
-        if record.id != document_id {
-            continue;
+        if record.id == document_id {
+            return read_document_context_for_record(workspace_root, record);
         }
 
-        let document_path =
-            file_service::resolve_document_path(workspace_root, &record.relative_path)?;
-        let content = fs::read_to_string(&document_path)
-            .map_err(|error| format!("Unable to read {}: {error}", document_path.display()))?;
+        if document_relative_path == Some(record.relative_path.as_str()) {
+            fallback_by_relative_path = Some(record);
+        }
+    }
 
-        return Ok((record, document_path, content));
+    if let Some(record) = fallback_by_relative_path {
+        return read_document_context_for_record(workspace_root, record);
     }
 
     Err(format!("Document {document_id} was not found."))
+}
+
+fn read_document_context_for_record(
+    workspace_root: &Path,
+    record: DocumentRecord,
+) -> Result<(DocumentRecord, PathBuf, String), String> {
+    let document_path = file_service::resolve_document_path(workspace_root, &record.relative_path)?;
+    let content = fs::read_to_string(&document_path)
+        .map_err(|error| format!("Unable to read {}: {error}", document_path.display()))?;
+
+    Ok((record, document_path, content))
+}
+
+fn retarget_thread_to_document_if_anchor_matches(
+    workspace_root: &Path,
+    document_record: &DocumentRecord,
+    document_content: &str,
+    thread: &mut ThreadRecord,
+) -> Result<bool, String> {
+    let original_document_id = thread.document_id.clone();
+
+    if is_document_thread(thread) {
+        let expected_quote = format!("Entire document: {}", document_record.relative_path);
+        let current_content_hash = file_service::content_hash(document_content);
+        if thread.anchor.quote != expected_quote
+            && thread.anchor.base_content_hash != current_content_hash
+        {
+            return Ok(false);
+        }
+
+        normalize_document_thread_anchor_if_needed(
+            workspace_root,
+            document_record,
+            document_content,
+            thread,
+        )?;
+    } else {
+        let original_anchor = thread.anchor.clone();
+        anchor_service::reattach_anchor(
+            &mut thread.anchor,
+            document_content,
+            &document_record.heading_index,
+        );
+
+        if thread.anchor.state != "attached" {
+            thread.anchor = original_anchor;
+            return Ok(false);
+        }
+    }
+
+    thread.document_id = document_record.id.clone();
+    thread.updated_at = file_service::now_rfc3339()?;
+    thread_service::save_thread_record(workspace_root, thread)?;
+    thread_service::append_event(
+        workspace_root,
+        "thread.document_retargeted",
+        Some(&thread.id),
+        Some(&document_record.id),
+        None,
+        Some(&format!("{original_document_id} -> {}", document_record.id)),
+    )?;
+
+    Ok(true)
 }
 
 fn with_review_context(
@@ -2118,6 +2195,7 @@ mod tests {
         let result = provider_service::run_provider_thread_action_with_stream(
             workspace_root.to_str().expect("workspace root"),
             &doc_id,
+            None,
             &thread_id,
             ThreadProvider::Codex,
             ProviderThreadAction::Feedback,
@@ -2154,6 +2232,77 @@ mod tests {
             vec!["Live ", "feedback"]
         );
         assert!(events.iter().all(|event| event.run_id == "run-test"));
+    }
+
+    #[test]
+    fn provider_action_uses_relative_path_when_invocation_document_id_is_stale() {
+        let _lock = PROVIDER_ENV_LOCK
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        let workspace_root = unique_temp_dir("margent-stale-invocation-doc");
+        let codex_bin = write_fake_codex(&workspace_root);
+        let (doc_id, thread_id) = create_review_workspace(&workspace_root);
+        let previous_codex_bin = env::var_os("CODEX_BIN");
+        env::set_var("CODEX_BIN", &codex_bin);
+
+        let result = provider_service::run_provider_thread_action_with_stream(
+            workspace_root.to_str().expect("workspace root"),
+            "doc_missing_from_registry",
+            Some("draft.md"),
+            &thread_id,
+            ThreadProvider::Codex,
+            ProviderThreadAction::Feedback,
+            "",
+            None,
+            None,
+            None,
+            &mut |_| {},
+        )
+        .expect("run feedback with stale invocation document id");
+
+        restore_codex_bin(previous_codex_bin);
+        fs::remove_dir_all(&workspace_root).expect("cleanup");
+
+        assert_eq!(result.thread.document_id, doc_id);
+        let message = result.thread.messages.last().expect("codex reply");
+        assert_eq!(message.body, "Codex feedback text");
+    }
+
+    #[test]
+    fn provider_action_retargets_stale_thread_document_id_when_anchor_matches() {
+        let _lock = PROVIDER_ENV_LOCK
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        let workspace_root = unique_temp_dir("margent-stale-thread-doc");
+        let codex_bin = write_fake_codex(&workspace_root);
+        let (doc_id, thread_id) = create_review_workspace(&workspace_root);
+        let mut thread =
+            thread_service::load_thread_record(&workspace_root, &thread_id).expect("load thread");
+        thread.document_id = "doc_missing_from_registry".into();
+        thread_service::save_thread_record(&workspace_root, &thread).expect("save stale thread");
+        let previous_codex_bin = env::var_os("CODEX_BIN");
+        env::set_var("CODEX_BIN", &codex_bin);
+
+        let result = provider_service::run_provider_thread_action(
+            workspace_root.to_str().expect("workspace root"),
+            &doc_id,
+            &thread_id,
+            ThreadProvider::Codex,
+            ProviderThreadAction::Feedback,
+            "",
+            None,
+        )
+        .expect("run feedback with stale thread document id");
+        let saved_thread = thread_service::load_thread_record(&workspace_root, &thread_id)
+            .expect("load repaired thread");
+
+        restore_codex_bin(previous_codex_bin);
+        fs::remove_dir_all(&workspace_root).expect("cleanup");
+
+        assert_eq!(result.thread.document_id, doc_id);
+        assert_eq!(saved_thread.document_id, doc_id);
+        let message = result.thread.messages.last().expect("codex reply");
+        assert_eq!(message.body, "Codex feedback text");
     }
 
     #[test]

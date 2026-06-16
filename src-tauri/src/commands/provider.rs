@@ -19,6 +19,7 @@ pub async fn run_provider_thread_action(
     registry: State<'_, provider_service::ProviderRunRegistry>,
     workspace_root: String,
     document_id: String,
+    document_relative_path: Option<String>,
     thread_id: String,
     provider: ThreadProvider,
     action: ProviderThreadAction,
@@ -36,6 +37,7 @@ pub async fn run_provider_thread_action(
         provider_service::run_provider_thread_action_with_stream(
             &workspace_root,
             &document_id,
+            document_relative_path.as_deref(),
             &thread_id,
             provider,
             action,
@@ -59,6 +61,7 @@ pub async fn run_provider_document_action(
     registry: State<'_, provider_service::ProviderRunRegistry>,
     workspace_root: String,
     document_id: String,
+    document_relative_path: Option<String>,
     provider: ThreadProvider,
     action: ProviderDocumentAction,
     instruction: String,
@@ -75,6 +78,7 @@ pub async fn run_provider_document_action(
         provider_service::run_provider_document_action_with_stream(
             &workspace_root,
             &document_id,
+            document_relative_path.as_deref(),
             provider,
             action,
             &instruction,
@@ -97,6 +101,7 @@ pub async fn run_codex_thread_action(
     registry: State<'_, provider_service::ProviderRunRegistry>,
     workspace_root: String,
     document_id: String,
+    document_relative_path: Option<String>,
     thread_id: String,
     action: ProviderThreadAction,
     instruction: String,
@@ -113,6 +118,7 @@ pub async fn run_codex_thread_action(
         provider_service::run_provider_thread_action_with_stream(
             &workspace_root,
             &document_id,
+            document_relative_path.as_deref(),
             &thread_id,
             ThreadProvider::Codex,
             action,
