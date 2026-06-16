@@ -44,11 +44,12 @@ claude mcp add margent -- margent mcp --workspace "$PWD"
 margent doctor
 ```
 
-`margent install --agent-skills` installs the shared Margent skill into
-`~/.claude/skills/margent`. `margent init --write-config` writes `CLAUDE.md`,
-`AGENTS.md`, `.mcp.json`, `.codex/config.toml`, `.mdreview/`, review passes, and
-the workspace-local skill copy. Claude Code users can ignore the Codex config
-unless they later decide to use Codex too.
+`margent install --agent-skills` installs the shared Margent skill into both
+`~/.claude/skills/margent` and `~/.codex/skills/margent`. Claude Code-only users
+can ignore the Codex copy unless they later decide to use Codex too. `margent
+init --write-config` writes `CLAUDE.md`, `AGENTS.md`, `.mcp.json`,
+`.codex/config.toml`, `.mdreview/`, review passes, and the workspace-local skill
+copy.
 
 ## What To Do
 
