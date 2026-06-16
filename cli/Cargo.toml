@@ -20,4 +20,4 @@ tokio = { version = "1", features = ["macros", "net", "rt-multi-thread", "sync",
 walkdir = "2"
 similar = "2"
 wait-timeout = "0.2"
-notify = "6"
+notify = "8"
