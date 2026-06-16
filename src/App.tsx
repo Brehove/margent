@@ -1058,6 +1058,7 @@ function App() {
         const result = await invokeBackend<ProviderThreadActionResult>("run_provider_thread_action", {
           action,
           documentId: activeDocument.id,
+          documentRelativePath: activeDocument.relativePath,
           instruction,
           passName,
           provider,
@@ -1184,6 +1185,7 @@ function App() {
         const result = await invokeBackend<ProviderThreadActionResult>("run_provider_document_action", {
           action,
           documentId: activeDocument.id,
+          documentRelativePath: activeDocument.relativePath,
           instruction: trimmedInstruction,
           passName,
           provider,
