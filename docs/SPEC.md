@@ -388,6 +388,7 @@ Installation should be simple and terminal-first:
 - the app may offer an "Install CLI" action, but the result should be a normal `margent` command on `PATH`
 - a standalone installer or Homebrew formula is also acceptable
 - `margent install` should verify that the command is available on `PATH` and print shell-specific next steps if it is not
+- `margent install --agent-skills` should install the shared public Margent skill into Claude Code and Codex skill directories without collecting or storing provider credentials
 - `margent doctor` should verify `codex`, `claude`, auth state, and basic workspace compatibility
 
 Workspace bootstrap should be explicit:

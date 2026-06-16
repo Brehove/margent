@@ -58,8 +58,16 @@ struct ThreadSelectorArgs {
 
 #[derive(Subcommand)]
 enum Commands {
-    /// Verify margent is on PATH and print binary location
-    Install,
+    /// Verify margent is on PATH and optionally install agent skills
+    Install {
+        /// Install the shared Margent skill into Claude Code and Codex skill directories
+        #[arg(long)]
+        agent_skills: bool,
+
+        /// Replace an existing installed Margent skill
+        #[arg(long)]
+        force: bool,
+    },
 
     /// Initialize .mdreview/ in the current directory
     Init {
@@ -590,7 +598,10 @@ fn main() {
     let output = OutputFormat::from_json_flag(cli.json);
 
     let result = match cli.command {
-        Commands::Install => cmd_install(output),
+        Commands::Install {
+            agent_skills,
+            force,
+        } => cmd_install(output, agent_skills, force),
         Commands::Init { write_config } => cmd_init(output, write_config),
         Commands::Doctor => cmd_doctor(output),
         Commands::Open {
@@ -707,7 +718,15 @@ fn thread_with_deep_link(
 
 // ── install ─────────────────────────────────────────────────────────────────
 
-fn cmd_install(output: OutputFormat) -> Result<(), String> {
+#[derive(Debug, Serialize)]
+struct AgentSkillInstallReport {
+    agent: &'static str,
+    target: String,
+    status: &'static str,
+    detail: String,
+}
+
+fn cmd_install(output: OutputFormat, agent_skills: bool, force: bool) -> Result<(), String> {
     let exe =
         env::current_exe().map_err(|e| format!("Unable to determine binary location: {e}"))?;
     let exe_str = exe.to_string_lossy();
@@ -719,6 +738,12 @@ fn cmd_install(output: OutputFormat) -> Result<(), String> {
         .map(|o| o.status.success())
         .unwrap_or(false);
 
+    let agent_skill_results = if agent_skills {
+        install_agent_skills(force)?
+    } else {
+        Vec::new()
+    };
+
     if output.is_json() {
         return print_json(&json!({
             "binaryLocation": exe_str,
@@ -726,6 +751,7 @@ fn cmd_install(output: OutputFormat) -> Result<(), String> {
             "homebrewTap": "Brehove/margent",
             "onPath": on_path,
             "pathHint": exe.parent().map(|parent| parent.to_string_lossy().to_string()),
+            "agentSkills": agent_skill_results,
         }));
     }
 
@@ -746,7 +772,96 @@ fn cmd_install(output: OutputFormat) -> Result<(), String> {
         }
     }
 
+    if agent_skills {
+        println!("Agent skill install:");
+        for result in &agent_skill_results {
+            println!("  {}: {} ({})", result.agent, result.target, result.status);
+            println!("    {}", result.detail);
+        }
+    } else {
+        println!("Agent skill install:");
+        println!("  Run `margent install --agent-skills` to copy the shared skill into Claude Code and Codex.");
+    }
+
     Ok(())
+}
+
+fn install_agent_skills(force: bool) -> Result<Vec<AgentSkillInstallReport>, String> {
+    let home = env::var_os("HOME").ok_or_else(|| "Unable to determine HOME".to_string())?;
+    let home = PathBuf::from(home);
+
+    let targets = [
+        (
+            "Claude Code",
+            home.join(".claude").join("skills").join("margent"),
+        ),
+        ("Codex", home.join(".codex").join("skills").join("margent")),
+    ];
+
+    targets
+        .into_iter()
+        .map(|(agent, target)| install_one_agent_skill(agent, &target, force))
+        .collect()
+}
+
+fn install_one_agent_skill(
+    agent: &'static str,
+    target: &Path,
+    force: bool,
+) -> Result<AgentSkillInstallReport, String> {
+    if fs::symlink_metadata(target).is_ok() {
+        if !force {
+            return Ok(AgentSkillInstallReport {
+                agent,
+                target: target.to_string_lossy().to_string(),
+                status: "skipped",
+                detail: "Existing skill left untouched; rerun with --force to replace it.".into(),
+            });
+        }
+        remove_existing_path(target)?;
+    }
+
+    let parent = target
+        .parent()
+        .ok_or_else(|| format!("Unable to determine parent for {}", target.display()))?;
+    fs::create_dir_all(parent)
+        .map_err(|error| format!("Unable to create {}: {error}", parent.display()))?;
+    fs::create_dir_all(target.join("agents"))
+        .map_err(|error| format!("Unable to create {}: {error}", target.display()))?;
+
+    fs::write(target.join("SKILL.md"), MARGENT_SKILL_TEMPLATE)
+        .map_err(|error| format!("Unable to write SKILL.md: {error}"))?;
+    fs::write(target.join("README.md"), MARGENT_SKILL_README)
+        .map_err(|error| format!("Unable to write README.md: {error}"))?;
+    fs::write(
+        target.join("agents").join("openai.yaml"),
+        MARGENT_OPENAI_METADATA,
+    )
+    .map_err(|error| format!("Unable to write openai.yaml: {error}"))?;
+
+    Ok(AgentSkillInstallReport {
+        agent,
+        target: target.to_string_lossy().to_string(),
+        status: "installed",
+        detail: "Installed the shared Margent agent skill.".into(),
+    })
+}
+
+fn remove_existing_path(path: &Path) -> Result<(), String> {
+    let metadata = fs::symlink_metadata(path)
+        .map_err(|error| format!("Unable to inspect {}: {error}", path.display()))?;
+    let file_type = metadata.file_type();
+
+    if file_type.is_symlink() || metadata.is_file() {
+        fs::remove_file(path)
+            .map_err(|error| format!("Unable to remove {}: {error}", path.display()))
+    } else if metadata.is_dir() {
+        fs::remove_dir_all(path)
+            .map_err(|error| format!("Unable to remove {}: {error}", path.display()))
+    } else {
+        fs::remove_file(path)
+            .map_err(|error| format!("Unable to remove {}: {error}", path.display()))
+    }
 }
 
 // ── desktop open ─────────────────────────────────────────────────────────────
@@ -1098,60 +1213,12 @@ fn toml_quote(value: &str) -> String {
     format!("\"{}\"", value.replace('\\', "\\\\").replace('"', "\\\""))
 }
 
+const MARGENT_SKILL_TEMPLATE: &str = include_str!("../../skills/margent/SKILL.md");
+const MARGENT_SKILL_README: &str = include_str!("../../skills/margent/README.md");
+const MARGENT_OPENAI_METADATA: &str = include_str!("../../skills/margent/agents/openai.yaml");
+
 fn margent_skill_template() -> String {
-    r#"---
-name: margent
-description: Manage Margent threaded Markdown review workspaces. Use for listing documents, reading or replying to review threads, creating anchored comments, reviewing proposals, reanchoring, and checking workspace events.
----
-
-# Margent Review Skill
-
-Margent stores review state in `.mdreview/` JSON sidecars next to Markdown files. The Markdown document is the human text. Threads, messages, proposals, agent cursors, and events live in `.mdreview/`.
-
-## Rules
-
-- Reply in Margent threads instead of leaving loose notes.
-- Prefer stable IDs (`--id`, `threadId`, `proposalId`) over ordinals when an operation might change the thread set.
-- Read `.mdreview/manual.md` before doing review work; it contains standing workspace instructions.
-- Use `.mdreview/skills/*.md` review passes for action-specific judgment (`--pass <name>`).
-- Do not rewrite an existing reviewed document directly. Create or accept hash-gated proposals unless the user explicitly asks for direct apply.
-- After editing Markdown outside Margent, run `margent reanchor --check --document <relative-path>`.
-- Use `--json` for automation and parse stderr as JSON on non-zero exits.
-
-## CLI
-
-- `margent files list/read/create/rename/delete/outline`
-- `margent open <doc> [--thread <thread_id>]`
-- `margent threads list/show/add/reply/delete/delete-message/resolve/reopen`
-- `margent proposals list/show/accept/reject`
-- `margent export-critic <doc> [--output <path>] [--include-resolved]`
-- `margent import-critic <critic-file> --document <doc> [--dry-run]`
-- `margent events tail --json [--since <event-id>]`
-- `margent reanchor --check [--document <path>]`
-- `margent codify [--provider codex|claude]`
-- `margent codex|claude feedback/revise/comment/reply/sync [--pass <name>]`
-
-Destructive CLI verbs require explicit confirmation flags such as `--yes`. Proposal accept is hash-gated and writes a snapshot first; use `margent revert-last [--document <path>]` to restore the latest snapshot.
-
-## Review Context
-
-Provider actions automatically read:
-
-- `.mdreview/manual.md` for standing instructions.
-- `.mdreview/memory.md` for review lessons distilled by `margent codify`.
-- `.mdreview/skills/<name>.md` when an action is run with `--pass <name>`.
-
-## MCP
-
-Register the workspace server with:
-
-```sh
-margent mcp --workspace <workspace-root>
-```
-
-Use MCP tools for atomic primitives: list/read documents, list/get/create/reply/resolve/reopen threads, list/get/accept/reject proposals, reanchor threads, and inspect events since a cursor.
-"#
-    .to_string()
+    MARGENT_SKILL_TEMPLATE.to_string()
 }
 
 fn workspace_agents_template() -> String {
@@ -1242,11 +1309,6 @@ Preserve the author's voice. Suggest changes that sharpen rhythm, clarity, and e
 "#
     .to_string()
 }
-
-const MARGENT_OPENAI_METADATA: &str = r#"name: margent
-description: Manage Margent threaded Markdown review workspaces through the margent CLI and MCP server.
-entrypoint: SKILL.md
-"#;
 
 // ── doctor ──────────────────────────────────────────────────────────────────
 

@@ -4,28 +4,41 @@ Margent is a local-first macOS Markdown review app: write in a rendered-first Co
 
 ![Margent desktop screenshot](docs/assets/margent-app.png)
 
-[Website](https://brehove.github.io/margent/) · [Download for Mac](https://github.com/Brehove/margent/releases/latest/download/Margent.dmg) · [Latest release](https://github.com/Brehove/margent/releases/latest)
+[Website](https://brehove.github.io/margent/) · [Agent setup](docs/agent-setup.md) · [Agent skill](skills/margent) · [Latest release](https://github.com/Brehove/margent/releases/latest)
 
 ## Status
 
 Margent is early, macOS-first software. The desktop app, CLI, sidecar schema, exports, provider actions, and updater workflow are actively evolving, but the repository is organized so user documents and review sidecars stay local-first.
 
-Telemetry: Margent does not phone home or collect document content. Provider calls run through the user's own Codex and Claude Code CLIs.
+Telemetry: Margent does not phone home or collect documents, comments, prompts, API keys, OAuth tokens, or analytics. Provider calls run through the user's own Codex and Claude Code CLIs.
 
 ## What Ships
 
 - Desktop app: Tauri 2, React 19, CodeMirror, file/open-with/deep-link support, Review Brief, project search, exports, native notifications, and update checks from GitHub Releases.
-- CLI: `margent` for workspace init, file/thread/proposal CRUD, reanchoring, CriticMarkup import/export, `margent serve`, MCP, Codex/Claude provider actions, `codify`, and `margent open`.
+- CLI: `margent` for workspace init, file/thread/proposal CRUD, reanchoring, CriticMarkup import/export, `margent serve`, MCP, Codex/Claude provider actions, agent skill install, `codify`, and `margent open`.
+- Agent skill: a shared `skills/margent/SKILL.md` package that teaches Claude Code and Codex how to use the Margent CLI without storing credentials.
 - Persistence: Markdown stays as normal files; `.mdreview/` stores documents, threads, proposals, events, agent cursors, review memory, review passes, snapshots, and authorship provenance.
 
-## Prerequisites And First-Run Setup
+## Agent-First Setup
+
+The public install path is agent-first. Paste the setup prompt from the
+[website](https://brehove.github.io/margent/) into Claude Code or Codex, or give
+your agent [docs/agent-setup.md](docs/agent-setup.md) directly.
+
+That setup path asks the agent to clone the repo, install the CLI, install the
+shared Margent agent skill for Claude Code and Codex, run checks, open the app,
+and walk the user through Codex or Claude login if needed.
+Margent does not handle provider OAuth itself; login is initiated by the user
+through `codex login` or `claude auth login`.
+
+## Prerequisites And Manual Setup
 
 - macOS.
 - Node 22 recommended. Node 20 requires 20.19.0 or newer; older Node 20 builds fail with current Vite tooling.
 - Rust stable.
 - Optional agent providers: Codex CLI and/or Claude Code. Margent uses whichever of these CLIs you install and log into through their own tools.
 
-Margent does not collect API keys. Agent authentication stays in the provider CLIs and macOS Keychain; the desktop app and CLI only check whether `codex` / `claude` are installed and authenticated.
+Margent does not collect API keys or OAuth tokens. Agent authentication stays in the provider CLIs and macOS Keychain; the desktop app and CLI only check whether `codex` / `claude` are installed and authenticated.
 
 Provider setup:
 
@@ -78,8 +91,13 @@ From source:
 
 ```sh
 cargo install --locked --path cli
+margent install --agent-skills
 margent doctor
 ```
+
+`margent install --agent-skills` copies the shared skill into
+`~/.claude/skills/margent` and `~/.codex/skills/margent`. It leaves existing
+skills untouched unless you rerun it with `--force`.
 
 ## Using Margent With Codex
 
