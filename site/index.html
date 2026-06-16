@@ -5,16 +5,16 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta
       name="description"
-      content="Margent is a local-first, agent-native Markdown writing editor for working with Codex and Claude Code."
+      content="Margent is a local-first, agent-native Markdown writing editor for Claude Code and Codex."
     />
     <meta property="og:title" content="Margent" />
     <meta
       property="og:description"
-      content="A local-first Markdown writing editor with anchored comments, agent replies, reviewable revisions, and exports."
+      content="A local-first Markdown review layer with anchored comments, agent replies, reviewable revisions, and exports."
     />
     <meta property="og:type" content="website" />
     <meta property="og:image" content="assets/margent-comment-pane.png" />
-    <title>Margent - Agent-native Markdown writing</title>
+    <title>Margent - Local Markdown review for agents</title>
     <link rel="stylesheet" href="styles.css" />
   </head>
   <body>
@@ -22,283 +22,243 @@
       <a class="brand" href="./" aria-label="Margent home">Margent</a>
       <nav>
         <a href="#install">Install</a>
-        <a href="#how">How it works</a>
-        <a href="#privacy">Privacy</a>
         <a href="https://github.com/Brehove/margent">GitHub</a>
       </nav>
     </header>
 
     <main>
       <section class="hero" aria-labelledby="hero-title">
-        <div class="hero-copy">
-          <p class="eyebrow">Agent-native writing editor</p>
-          <h1 id="hero-title">Margent</h1>
+        <div class="wrap">
+          <p class="eyebrow">Local-first Markdown review</p>
+          <h1 id="hero-title">Margent reviews drafts. Locally.</h1>
           <p class="lede">
-            Write in Markdown, leave comments in the margins, and ask Codex or
-            Claude Code to explain, question, or revise a passage without moving
-            your draft into a web app.
+            An open-source review layer for Claude Code and Codex. Write in
+            Markdown, leave comments in the margin, and let your agent answer or
+            propose revisions without moving the draft into a web app.
           </p>
-          <div class="actions" aria-label="Primary actions">
-            <a class="button primary" href="#install">Install with your agent</a>
-            <a class="button secondary" href="https://github.com/Brehove/margent">
-              View the repo
-            </a>
+          <div class="link-row" aria-label="Primary links">
+            <a href="#install">Install with your agent</a>
+            <a href="https://github.com/Brehove/margent">View the repo</a>
           </div>
-          <p class="privacy-line">
-            Local files. No Margent account. No collected documents, prompts,
-            comments, API keys, OAuth tokens, or analytics.
+          <p class="quiet-line">
+            No Margent account. No uploaded drafts. No prompt analytics. No
+            stored API keys or OAuth tokens.
           </p>
+          <p class="stamp">Made by Joel Gladd</p>
         </div>
       </section>
 
-      <section class="install-band" id="install" aria-labelledby="install-title">
-        <div class="section-heading">
+      <section class="install-section" id="install" aria-labelledby="install-title">
+        <div class="wrap">
           <p class="eyebrow">Install once</p>
-          <h2 id="install-title">Paste this into Claude Code or Codex.</h2>
-          <p>
+          <h2 id="install-title">Paste the prompt for your agent.</h2>
+          <p class="section-copy">
             Margent is meant to be installed by the same agent you will use for
-            writing help. The agent sets up the repo, CLI, and small Margent
-            instruction skill, then walks you through provider login when
-            needed.
+            writing help. Choose Claude Code or Codex below. Both paths install
+            the CLI, the shared Margent skill, and the desktop app into
+            <code>~/Applications</code>.
           </p>
-        </div>
 
-        <div class="prompt-panel">
-          <div class="prompt-toolbar">
-            <span>Copy for your agent</span>
-            <button class="copy-button" data-copy-prompt type="button">Copy</button>
-          </div>
-          <pre id="install-prompt">Install Margent for me.
+          <div class="prompt-grid">
+            <div class="prompt-panel">
+              <div class="prompt-toolbar">
+                <span>~ claude code install</span>
+                <button class="copy-button" data-copy-target="install-prompt-claude" type="button">
+                  Copy
+                </button>
+              </div>
+              <pre id="install-prompt-claude">Install Margent for me using Claude Code.
 
-Margent is a local-first Markdown writing editor for working with Claude Code or Codex. It keeps my Markdown files local and stores comments and revision state in .mdreview sidecars. The repo includes the Margent CLI and a small agent skill so Claude Code and Codex know how to use the CLI.
+Margent is a local-first Markdown writing editor for working with Claude Code. It keeps my Markdown files local and stores comments and revision state in .mdreview sidecars. The repo includes the Margent CLI and a small Claude-friendly skill so Claude Code knows how to use the CLI.
 
 Read https://raw.githubusercontent.com/Brehove/margent/main/docs/agent-setup.md and follow it as the source of truth.
 
-If you cannot run local shell commands in this chat, stop and tell me to use Claude Code, Codex, or another agent mode with shell and file access.
+If you cannot run local shell commands in this chat, stop and tell me to use Claude Code or another agent mode with shell and file access.
 
-Do not ask me for API keys, OAuth tokens, or provider secrets. Margent does not collect credentials. Codex and Claude authentication must be initiated by me through their own CLI login flows.
+Do not ask me for API keys, OAuth tokens, or provider secrets. Margent does not collect credentials. Claude authentication must be initiated by me through claude auth login.
 
 Set up Margent on this Mac:
 1. Verify macOS, Git, Node 22 or newer, Rust stable, and npm are available.
 2. Clone https://github.com/Brehove/margent into a normal projects folder, or inspect the existing clone if it is already present. Do not overwrite local changes.
-3. Install dependencies, run the checks in the setup doc, install the margent CLI on PATH, and run margent install --agent-skills so Claude Code and Codex can use it.
-4. Build the desktop app or run the development app according to the setup doc.
-5. Check whether codex and claude are installed and authenticated. If not, walk me through codex login or claude auth login; I will complete browser/OAuth login myself.
-6. Run margent doctor and summarize what works.
-7. Ask me exactly one question: should Margent default to Codex, Claude Code, or ask each time?
-8. Open a sample Markdown file in Margent and show me how to ask a question or request a revision from the comment pane.</pre>
+3. Install dependencies, run the checks in the setup doc, install the margent CLI on PATH, and run margent install --agent-skills so Claude Code can use it.
+4. Install the desktop app into ~/Applications using these exact commands:
+   osascript -e 'quit app "Margent"' 2&gt;/dev/null || true
+   npm run tauri build
+   mkdir -p ~/Applications
+   ditto src-tauri/target/release/bundle/macos/Margent.app ~/Applications/Margent.app
+   open ~/Applications/Margent.app
+5. Treat that as a local build for this Mac, not a signed and notarized public distribution artifact. Use ditto rather than cp -R. To update Margent later, rerun the build and ditto steps. For development iteration, use npm run tauri dev.
+6. Check whether claude is installed and authenticated. If not, walk me through claude auth login; I will complete browser/OAuth login myself.
+7. In my Markdown writing workspace, run margent init --write-config, then run claude mcp add margent -- margent mcp --workspace "$PWD".
+8. Run margent doctor and summarize what works.
+9. Open a sample Markdown file in Margent and show me how to ask a question or request a revision from the comment pane.</pre>
+            </div>
+
+            <div class="prompt-panel">
+              <div class="prompt-toolbar">
+                <span>~ codex install</span>
+                <button class="copy-button" data-copy-target="install-prompt-codex" type="button">
+                  Copy
+                </button>
+              </div>
+              <pre id="install-prompt-codex">Install Margent for me using Codex.
+
+Margent is a local-first Markdown writing editor for working with Codex. It keeps my Markdown files local and stores comments and revision state in .mdreview sidecars. The repo includes the Margent CLI and a small Codex-friendly skill so Codex knows how to use the CLI.
+
+Read https://raw.githubusercontent.com/Brehove/margent/main/docs/agent-setup.md and follow it as the source of truth.
+
+If you cannot run local shell commands in this chat, stop and tell me to use Codex or another agent mode with shell and file access.
+
+Do not ask me for API keys, OAuth tokens, or provider secrets. Margent does not collect credentials. Codex authentication must be initiated by me through codex login.
+
+Set up Margent on this Mac:
+1. Verify macOS, Git, Node 22 or newer, Rust stable, and npm are available.
+2. Clone https://github.com/Brehove/margent into a normal projects folder, or inspect the existing clone if it is already present. Do not overwrite local changes.
+3. Install dependencies, run the checks in the setup doc, install the margent CLI on PATH, and run margent install --agent-skills so Codex can use it.
+4. Install the desktop app into ~/Applications using these exact commands:
+   osascript -e 'quit app "Margent"' 2&gt;/dev/null || true
+   npm run tauri build
+   mkdir -p ~/Applications
+   ditto src-tauri/target/release/bundle/macos/Margent.app ~/Applications/Margent.app
+   open ~/Applications/Margent.app
+5. Treat that as a local build for this Mac, not a signed and notarized public distribution artifact. Use ditto rather than cp -R. To update Margent later, rerun the build and ditto steps. For development iteration, use npm run tauri dev.
+6. Check whether codex is installed and authenticated. If not, walk me through codex login; I will complete browser/OAuth login myself.
+7. In my Markdown writing workspace, run margent init --write-config and confirm .codex/config.toml includes the Margent MCP server.
+8. Run margent doctor and summarize what works.
+9. Open a sample Markdown file in Margent and show me how to ask a question or request a revision from the comment pane.</pre>
+            </div>
+          </div>
         </div>
       </section>
 
-      <section class="summary" id="how" aria-label="How Margent works">
-        <div class="section-heading">
+      <section class="product-section" aria-labelledby="product-title">
+        <div class="wrap wide-wrap">
+          <p class="eyebrow">What it does</p>
+          <h2 id="product-title">Comments stay attached to the passage.</h2>
+          <p class="section-copy">
+            Ask from the comment pane, or ask Claude Code or Codex from their
+            own agent session. Margent keeps the thread, proposed edit, and
+            source passage together.
+          </p>
+          <figure class="product-shot">
+            <img
+              alt="Margent showing a Markdown file with a Claude reply in the comment pane."
+              src="assets/margent-comment-pane.png"
+            />
+            <figcaption>
+              Toggle Codex or Claude Code, choose Ask or Revise, and review the
+              result before anything changes in the draft.
+            </figcaption>
+          </figure>
+        </div>
+      </section>
+
+      <section class="steps-section" aria-labelledby="steps-title">
+        <div class="wrap">
           <p class="eyebrow">How it works</p>
-          <h2>Keep writing. Bring agents into the margins.</h2>
-          <p>
-            Margent treats Markdown as the source of truth and adds a review
-            layer beside it. That means your draft stays portable, while
-            questions, agent replies, and proposed edits stay attached to the
-            passages that caused them.
-          </p>
-        </div>
-
-        <div class="feature-grid">
-          <article>
-            <h3>Write in ordinary Markdown.</h3>
-            <p>
-              Open a file or folder and draft normally. Margent saves the text
-              as Markdown, not as a private database format.
-            </p>
-          </article>
-          <article>
-            <h3>Ask from the comment pane.</h3>
-            <p>
-              Highlight a sentence, leave a question, choose Codex or Claude,
-              then press Ask or Revise. The answer comes back in the thread.
-            </p>
-          </article>
-          <article>
-            <h3>Chat through your agent too.</h3>
-            <p>
-              Claude Code or Codex can inspect the same Markdown workspace,
-              reply to comments, and propose changes from outside the app.
-            </p>
-          </article>
-          <article>
-            <h3>Approve every edit.</h3>
-            <p>
-              Agent revisions become proposals. You inspect the change and
-              accept or reject it. No agent silently rewrites the draft.
-            </p>
-          </article>
-          <article>
-            <h3>Export when the draft is ready.</h3>
-            <p>
-              Send work out as HTML or DOCX, publish to Google Docs when your
-              Google command-line tool is configured, or use print for PDF.
-            </p>
-          </article>
-          <article>
-            <h3>Review the whole workspace.</h3>
-            <p>
-              Review Brief gathers open questions, unanswered agent replies, and
-              pending proposals so long projects do not sprawl out of sight.
-            </p>
-          </article>
+          <h2 id="steps-title">One Markdown file, several ways in.</h2>
+          <ol class="steps-list">
+            <li>
+              <span>01</span>
+              <p>Open a Markdown folder. Margent keeps the text as ordinary files.</p>
+            </li>
+            <li>
+              <span>02</span>
+              <p>Leave comments, ask questions, or request revisions in the margin.</p>
+            </li>
+            <li>
+              <span>03</span>
+              <p>Let Claude Code or Codex reply through the CLI and shared skill.</p>
+            </li>
+            <li>
+              <span>04</span>
+              <p>Approve proposals, use Review Brief, and export to HTML or DOCX.</p>
+            </li>
+          </ol>
         </div>
       </section>
 
-      <section class="screenshot-section" aria-labelledby="pane-title">
-        <div class="screenshot-copy">
-          <p class="eyebrow">Comment pane</p>
-          <h2 id="pane-title">Ask questions where the question occurred.</h2>
-          <p>
-            The margin is the conversation. You can ask for an explanation,
-            challenge a claim, request a fact-check, or ask for a cleaner
-            revision. Margent keeps the reply attached to the highlighted
-            passage.
-          </p>
-          <div class="pane-controls">
-            <div>
-              <span>Choose the agent</span>
-              <p>
-                Toggle between Codex and Claude Code for each thread. Use the
-                provider that fits the job, without changing the document.
-              </p>
-            </div>
-            <div>
-              <span>Choose the action</span>
-              <p>
-                Ask adds a reply to the thread. Revise creates a proposal you
-                can inspect, accept, or reject.
-              </p>
-            </div>
+      <section class="sample-section" aria-labelledby="sample-title">
+        <div class="wrap">
+          <p class="eyebrow">Agent-native</p>
+          <h2 id="sample-title">Ask in normal language.</h2>
+          <div class="sample-prompts">
+            <button
+              class="sample-prompt"
+              data-copy-value="Use the Margent CLI to view my comments on this document."
+              type="button"
+            >
+              <span>Copy</span>
+              Use the Margent CLI to view my comments on this document.
+            </button>
+            <button
+              class="sample-prompt"
+              data-copy-value="Use the Margent CLI to evaluate this document for unclear claims."
+              type="button"
+            >
+              <span>Copy</span>
+              Use the Margent CLI to evaluate this document for unclear claims.
+            </button>
+            <button
+              class="sample-prompt"
+              data-copy-value="Use Margent to propose revisions, but do not apply them without my approval."
+              type="button"
+            >
+              <span>Copy</span>
+              Use Margent to propose revisions, but do not apply them without my approval.
+            </button>
           </div>
         </div>
-        <figure class="screenshot-frame">
-          <img
-            alt="Margent showing a Markdown file with a Claude reply in the comment pane."
-            src="assets/margent-comment-pane.png"
-          />
-          <figcaption>
-            Chat with the selected passage from inside Margent, or let Claude
-            Code and Codex use the same thread from their own agent sessions.
-          </figcaption>
-        </figure>
-      </section>
-
-      <section class="workflow-band" aria-labelledby="workflow-title">
-        <div class="section-heading">
-          <p class="eyebrow">Three ways in</p>
-          <h2 id="workflow-title">One Markdown file, several ways to work.</h2>
-        </div>
-        <div class="workflow-list">
-          <div>
-            <span>1</span>
-            <h3>Inside Margent</h3>
-            <p>
-              Use the comment pane to ask, revise, resolve threads, and approve
-              proposals without leaving the editor.
-            </p>
-          </div>
-          <div>
-            <span>2</span>
-            <h3>Inside Claude Code or Codex</h3>
-            <p>
-              Ask your agent in plain language while Margent keeps the review
-              state visible. For example:
-            </p>
-            <ul class="sample-prompts">
-              <li>"Use the Margent CLI to view my comments on this document."</li>
-              <li>"Use the Margent CLI to evaluate this document for unclear claims."</li>
-              <li>"Use the Margent CLI to answer the open comments in this workspace."</li>
-              <li>"Use Margent to propose revisions, but do not apply them without my approval."</li>
-            </ul>
-          </div>
-          <div>
-            <span>3</span>
-            <h3>From the CLI</h3>
-            <p>
-              Use <code>margent</code> for setup, diagnostics, exports, and
-              repeatable review workflows when you want a terminal path.
-            </p>
-          </div>
-        </div>
-      </section>
-
-      <section class="workspace-shot" aria-labelledby="workspace-title">
-        <div class="section-heading">
-          <p class="eyebrow">Review Brief</p>
-          <h2 id="workspace-title">A review inbox for long drafts.</h2>
-          <p>
-            Review Brief gathers unanswered agent replies, pending proposals,
-            and stale comments into one queue. It helps you see what still needs
-            your attention across a whole writing workspace.
-          </p>
-        </div>
-        <figure class="wide-frame">
-          <img
-            alt="Margent Review Brief showing a workspace review queue with an agent reply card."
-            src="assets/margent-review-brief.png"
-          />
-          <figcaption>
-            Treat the workspace like a review inbox: reply to open agent
-            threads, reopen the source passage, and keep long drafts moving.
-          </figcaption>
-        </figure>
       </section>
 
       <section class="privacy-section" id="privacy" aria-labelledby="privacy-title">
-        <div class="section-heading">
-          <p class="eyebrow">Local by design</p>
-          <h2 id="privacy-title">Margent does not collect your writing.</h2>
-          <p>
+        <div class="wrap">
+          <p class="eyebrow">Local and private</p>
+          <h2 id="privacy-title">Your writing stays on your Mac.</h2>
+          <p class="section-copy">
             Margent has no hosted account system and no server-side document
-            storage. Your documents stay in your folders. Review data stays in
-            local <code>.mdreview</code> files beside them.
+            storage. Review data lives in local <code>.mdreview</code> files
+            beside your drafts. Provider login is started by you through Codex
+            or Claude Code, not through Margent.
           </p>
+          <ul class="plain-list">
+            <li>No uploaded drafts.</li>
+            <li>No collected comments.</li>
+            <li>No prompt analytics.</li>
+            <li>No stored API keys or OAuth tokens.</li>
+          </ul>
         </div>
-        <div class="privacy-grid">
-          <p>No uploaded drafts.</p>
-          <p>No collected comments.</p>
-          <p>No prompt analytics.</p>
-          <p>No stored API keys.</p>
-          <p>No OAuth tokens.</p>
-          <p>No repo-linked login.</p>
-        </div>
-        <p class="fine-print">
-          Codex and Claude authentication is started by you through their own
-          command-line tools. That login is between you and the provider. It is
-          not connected to the Margent repository.
-        </p>
       </section>
 
-      <section class="manual-section" aria-labelledby="manual-title">
-        <div>
-          <p class="eyebrow">Manual path</p>
-          <h2 id="manual-title">Prefer to read the steps yourself?</h2>
-          <p>
-            The agent prompt is the front door, but everything is public and
-            inspectable. Read the setup guide, browse the code, or install from
-            source by hand.
+      <section class="open-section" aria-labelledby="open-title">
+        <div class="wrap">
+          <p class="eyebrow">Open source</p>
+          <h2 id="open-title">Readable code. Inspectable setup.</h2>
+          <p class="section-copy">
+            The agent prompt is the front door, but the repo is the source of
+            truth. Read the setup guide, inspect the skill, or install the CLI
+            from source.
           </p>
-        </div>
-        <div class="manual-actions">
-          <a class="button primary" href="https://github.com/Brehove/margent/blob/main/docs/agent-setup.md">
-            Read setup guide
-          </a>
-          <a class="button secondary" href="https://github.com/Brehove/margent">
-            Open GitHub
-          </a>
+          <div class="link-row">
+            <a href="https://github.com/Brehove/margent/blob/main/docs/agent-setup.md">
+              Read setup
+            </a>
+            <a href="https://github.com/Brehove/margent/tree/main/skills/margent">
+              Read the skill
+            </a>
+            <a href="https://github.com/Brehove/margent">GitHub</a>
+          </div>
         </div>
       </section>
     </main>
 
     <footer>
-      <span>MIT licensed.</span>
-      <a href="https://github.com/Brehove/margent/blob/main/SECURITY.md">Security</a>
-      <a href="https://github.com/Brehove/margent/issues">Issues</a>
-      <a href="https://github.com/Brehove/margent">GitHub</a>
+      <p class="stamp">Made by Joel Gladd</p>
+      <p>
+        MIT licensed. <a href="https://github.com/Brehove/margent/blob/main/SECURITY.md">Security</a>
+        <span aria-hidden="true">/</span>
+        <a href="https://github.com/Brehove/margent/issues">Issues</a>
+      </p>
     </footer>
 
     <script src="script.js" defer></script>

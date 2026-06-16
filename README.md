@@ -26,10 +26,26 @@ The public install path is agent-first. Paste the setup prompt from the
 your agent [docs/agent-setup.md](docs/agent-setup.md) directly.
 
 That setup path asks the agent to clone the repo, install the CLI, install the
-shared Margent agent skill for Claude Code and Codex, run checks, open the app,
-and walk the user through Codex or Claude login if needed.
+shared Margent agent skill for Claude Code and Codex, run checks, install the
+desktop app into `~/Applications`, and walk the user through Codex or Claude
+login if needed.
 Margent does not handle provider OAuth itself; login is initiated by the user
 through `codex login` or `claude auth login`.
+
+Claude Code-only users can use the same repo without installing or configuring
+Codex. After the CLI is installed, initialize each writing workspace with:
+
+```sh
+cd /path/to/markdown-workspace
+margent init --write-config
+claude auth login
+claude mcp add margent -- margent mcp --workspace "$PWD"
+margent doctor
+```
+
+That writes Claude-friendly workspace instructions, registers the Margent MCP
+server for the current workspace, and lets `margent doctor` report whether the
+Claude CLI, Claude auth, `.mcp.json`, `CLAUDE.md`, and shared skill are ready.
 
 ## Prerequisites And Manual Setup
 
@@ -77,6 +93,21 @@ npm run tauri build
 ```
 
 The built app is written under `src-tauri/target/release/bundle/macos/Margent.app`.
+For an agent-first local install on the Mac that built it, copy the app bundle
+into the user's Applications folder with `ditto`:
+
+```sh
+osascript -e 'quit app "Margent"' 2>/dev/null || true
+npm run tauri build
+mkdir -p ~/Applications
+ditto src-tauri/target/release/bundle/macos/Margent.app ~/Applications/Margent.app
+open ~/Applications/Margent.app
+```
+
+Use `ditto`, not `cp -R`, because it preserves app bundle metadata more
+reliably. This local source build is not the same as a signed and notarized
+public distribution artifact. To update Margent from source, rerun the build and
+`ditto` steps. For development iteration, use `npm run tauri dev`.
 
 ## CLI Install
 
@@ -99,9 +130,9 @@ margent doctor
 `~/.claude/skills/margent` and `~/.codex/skills/margent`. It leaves existing
 skills untouched unless you rerun it with `--force`.
 
-## Using Margent With Codex
+## Using Margent With Claude Code Or Codex
 
-Mode 1: Codex or Claude Code as a reviewer.
+Mode 1: Claude Code or Codex as a reviewer.
 
 ```sh
 cd /path/to/markdown-workspace
@@ -109,7 +140,7 @@ margent init --write-config
 margent doctor
 ```
 
-`margent init --write-config` creates `.mdreview/`, review pass templates, `.mdreview/skills/margent/SKILL.md`, `.mcp.json`, and `.codex/config.toml`. The generated MCP snippets look like this:
+`margent init --write-config` creates `.mdreview/`, review pass templates, `.mdreview/skills/margent/SKILL.md`, `CLAUDE.md`, `AGENTS.md`, `.mcp.json`, and `.codex/config.toml`. The generated MCP snippets look like this:
 
 ```json
 {
@@ -138,8 +169,10 @@ codex mcp add margent -- margent mcp --workspace /path/to/markdown-workspace
 Then ask the agent to review `draft.md`, reply to open threads, propose fixes, or run a pass:
 
 ```sh
-margent codex feedback --id thread_123 --pass voice
+margent claude feedback --id thread_123 --pass voice
 margent claude revise --id thread_123 --pass fact-check
+margent codex feedback --id thread_123 --pass voice
+margent codex revise --id thread_123 --pass fact-check
 ```
 
 Replies and proposals appear live in the desktop app through the `.mdreview/` watchers.
@@ -188,6 +221,7 @@ open -a Margent path/to/file.md
 - `docs/`: sidecar spec, release notes, schemas, and screenshots.
 - `Formula/`: Homebrew formula for the CLI.
 - `AGENTS.md`: public agent/contributor conventions.
+- `CLAUDE.md`: Claude Code-specific project instructions.
 
 ## Docs
 

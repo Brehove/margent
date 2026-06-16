@@ -22,6 +22,8 @@ Current release-level workflows that should continue to pass.
 - `margent threads reply` updates an existing thread and the new message appears in the app.
 - `margent threads resolve`, `reopen`, and `delete` round-trip correctly between CLI and app.
 - Canonical CLI flows that depend on anchors, especially `feedback` and `revise`, refresh anchors against current document content before operating.
+- `margent init --write-config` creates Claude-friendly and Codex-friendly workspace instructions: `CLAUDE.md`, `AGENTS.md`, `.mcp.json`, `.codex/config.toml`, `.mdreview/`, review passes, and the workspace-local Margent skill.
+- `margent doctor` reports Claude Code readiness clearly, including whether the Claude CLI/auth, `~/.claude/skills/margent/SKILL.md`, workspace `CLAUDE.md`, and `.mcp.json` are present.
 
 ## External Change Handling
 
@@ -38,5 +40,5 @@ Current release-level workflows that should continue to pass.
 
 ## Packaging
 
-- The installed app at `/Applications/Margent.app` can watch active documents and thread files in real workspaces.
+- The locally installed app at `~/Applications/Margent.app` can watch active documents and thread files in real workspaces.
 - The installed CLI at `~/.cargo/bin/margent` reads and writes the current thread schema without dropping newer anchor metadata.

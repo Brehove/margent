@@ -1,31 +1,39 @@
-const copyButton = document.querySelector("[data-copy-prompt]");
-const promptBlock = document.querySelector("#install-prompt");
+function setTemporaryText(element, text, delay = 1600) {
+  const originalText = element.textContent || "";
+  element.textContent = text;
+  window.setTimeout(() => {
+    element.textContent = originalText;
+  }, delay);
+}
 
-async function copyInstallPrompt() {
-  if (!copyButton || !promptBlock) return;
-
-  const originalText = copyButton.textContent || "Copy";
-  const promptText = promptBlock.textContent.trim();
-
+async function copyText(text, control, fallbackElement = control) {
   try {
-    await navigator.clipboard.writeText(promptText);
-    copyButton.textContent = "Copied";
-    window.setTimeout(() => {
-      copyButton.textContent = originalText;
-    }, 1800);
+    await navigator.clipboard.writeText(text);
+    setTemporaryText(control, "Copied");
   } catch {
     const selection = window.getSelection();
     const range = document.createRange();
-    range.selectNodeContents(promptBlock);
+    range.selectNodeContents(fallbackElement);
     selection?.removeAllRanges();
     selection?.addRange(range);
-    copyButton.textContent = "Selected";
-    window.setTimeout(() => {
-      copyButton.textContent = originalText;
-    }, 2200);
+    setTemporaryText(control, "Selected", 2200);
   }
 }
 
-copyButton?.addEventListener("click", () => {
-  void copyInstallPrompt();
+document.querySelectorAll("[data-copy-target]").forEach((button) => {
+  button.addEventListener("click", () => {
+    const targetId = button.getAttribute("data-copy-target");
+    const target = targetId ? document.getElementById(targetId) : null;
+    if (!target) return;
+    void copyText(target.textContent.trim(), button, target);
+  });
+});
+
+document.querySelectorAll("[data-copy-value]").forEach((button) => {
+  button.addEventListener("click", () => {
+    const text = button.getAttribute("data-copy-value");
+    const label = button.querySelector("span") || button;
+    if (!text) return;
+    void copyText(text, label, button);
+  });
 });

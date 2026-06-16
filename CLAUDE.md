@@ -1,21 +1,33 @@
-# AGENTS.md
+# CLAUDE.md
 
 ## Project
 
-Margent is a local-first macOS Markdown review app. It lets people edit Markdown, anchor threaded comments to passages, review agent-authored replies and revision proposals, and keep review state beside the document in `.mdreview/` JSON sidecars.
+Margent is a local-first macOS Markdown review app. It lets people edit Markdown, anchor threaded comments to passages, review Claude Code or Codex replies and revision proposals, and keep review state beside the document in `.mdreview/` JSON sidecars.
 
-The public source tree contains the product code, shared schemas, tests, release wiring, and contributor-facing documentation. Private operator notes, local review content, provider credentials, and machine-specific setup belong outside the tracked tree.
+The public source tree contains the product code, shared schemas, tests, release wiring, agent skill, and contributor-facing documentation. Private operator notes, local review content, provider credentials, and machine-specific setup belong outside the tracked tree.
 
 Useful public docs:
 
 - `README.md`: setup, build, CLI, and usage overview
-- `CLAUDE.md`: Claude Code-specific repository and workflow guidance
+- `docs/agent-setup.md`: agent-first installation guide
 - `docs/SPEC.md`: product behavior and MVP decisions
 - `docs/ACCEPTANCE.md`: user-facing acceptance criteria
 - `docs/mdreview-spec.md`: `.mdreview` sidecar layout and schema index
 - `docs/release.md`: release, signing, notarization, updater, and Homebrew notes
 - `CONTRIBUTING.md`: contributor workflow and verification gates
 - `SECURITY.md`: vulnerability reporting and credential model
+
+## Claude Code Rules
+
+- Prefer `margent --json` or the Margent MCP server for review operations.
+- Prefer `margent claude ...` commands when asking Claude Code to answer comments or propose revisions.
+- Use `margent codex ...` only when the user explicitly wants Codex.
+- Run `margent init --write-config` inside a writing workspace so Claude Code gets `.mcp.json`, `CLAUDE.md`, `AGENTS.md`, review passes, and `.mdreview/`.
+- If MCP is not already registered, run `claude mcp add margent -- margent mcp --workspace <workspace-root>`.
+- Read `.mdreview/manual.md` before reviewing when it exists; it is standing context for that workspace.
+- Never silently edit a reviewed Markdown document. Use Margent proposals for changes that need human approval unless the user explicitly asks for direct edits.
+- After external Markdown edits, run `margent reanchor --check --document <relative-path>`.
+- Do not ask for API keys, OAuth tokens, Keychain values, or provider secrets. Claude authentication belongs to Claude Code through `claude auth login`.
 
 ## Repository Conventions
 
@@ -25,23 +37,13 @@ Useful public docs:
 - Do not commit personal absolute paths. Use repo-relative paths in docs and synthetic paths in tests.
 - Do not use `window.prompt`, `window.confirm`, or `window.alert` in production source. The packaged WKWebView app should use in-app UI or Tauri plugin flows.
 - Prefer deleting dead code over parking it in historical folders. Git history is the archive.
-- New behavior should have the smallest meaningful test coverage. Broaden tests for shared record formats, provider execution, sidecar schemas, editor geometry, and release-affecting workflows.
-
-## Architecture
-
-- Frontend: React 19, TypeScript, Zustand, and CodeMirror.
-- Desktop shell: Tauri v2 with Rust commands for workspace, document, thread, proposal, export, provider, notification, deep-link, and watcher operations.
-- CLI: Rust binary under `cli/`, sharing sidecar records and core behavior with the desktop app.
-- Shared core: `crates/margent-core/` owns sidecar records, anchors, exports, review context, provider-adjacent helpers, CriticMarkup, and related reusable logic.
-- Persistence: Markdown files remain ordinary user files. Margent writes review metadata to `.mdreview/`.
 
 ## Provider Invariants
 
 Provider integrations are intentionally thin wrappers around the user's installed provider CLIs.
 
-- Codex streaming JSONL can report the final assistant text in `item.completed.item.text` for `agent_message` items. Preserve parser coverage for that event shape.
 - Claude Code `--output-format stream-json` requires `--verbose` in streaming provider paths.
-- Do not hard-code a Claude model in Margent when provider config/default routing should decide it.
+- Do not hard-code a Claude model in Margent when Claude Code config/default routing should decide it.
 - Provider auth belongs to the provider CLIs and the user's system credential store, not to Margent source files.
 
 ## Verification
