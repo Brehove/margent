@@ -378,14 +378,16 @@ async fn ws_events(
         let _ = socket
             .send(Message::Text(
                 json!({"event":"ready","kind":"workspace","body":"Margent serve connected"})
-                    .to_string(),
+                    .to_string()
+                    .into(),
             ))
             .await;
         while rx.recv().await.is_some() {
             if socket
                 .send(Message::Text(
                     json!({"event":"refresh","kind":"events","body":"Workspace sidecar changed"})
-                        .to_string(),
+                        .to_string()
+                        .into(),
                 ))
                 .await
                 .is_err()
