@@ -228,6 +228,25 @@ describe("FileBrowser rendering", () => {
     expect(onCreateDocument).toHaveBeenCalledWith("drafts/new-note.md");
   });
 
+  it("does not reselect the new-file name after each typed character", () => {
+    const selectSpy = vi.spyOn(HTMLInputElement.prototype, "select");
+
+    try {
+      render(createElement(FileBrowser, { ...defaultProps }));
+
+      fireEvent.click(screen.getByRole("button", { name: "New File" }));
+
+      const input = screen.getByLabelText("Create Markdown file name");
+      expect(selectSpy).toHaveBeenCalledTimes(1);
+
+      fireEvent.change(input, { target: { value: "a" } });
+
+      expect(selectSpy).toHaveBeenCalledTimes(1);
+    } finally {
+      selectSpy.mockRestore();
+    }
+  });
+
   it("exposes row actions for reveal, rename, and delete", () => {
     const onDeleteDocument = vi.fn();
     const onRenameDocument = vi.fn();
