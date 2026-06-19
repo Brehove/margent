@@ -123,6 +123,7 @@ export interface EditorViewportRect {
 const SESSION_METRICS_UPDATE_DELAY_MS = 180;
 const EMPTY_MARKDOWN_PASTE_PATTERN = /^[\s\\]*$/;
 const SUPPORTED_IMAGE_MIME_PATTERN = /^image\/(png|jpe?g|gif|webp|avif)$/i;
+let pendingImageInsertionId = 0;
 
 const HEADING_MARKER_PATTERN = /^(?:\s{0,3})(#{1,6})(?:[ \t]+|$)/;
 const BLOCKQUOTE_PATTERN = /^\s{0,3}>\s?/;
@@ -255,6 +256,49 @@ const editorPointerSelectionStateField = StateField.define<boolean>({
     }
 
     return isSelecting;
+  },
+});
+
+interface PendingImageInsertionRange {
+  from: number;
+  id: string;
+  to: number;
+}
+
+const addPendingImageInsertionRange = StateEffect.define<PendingImageInsertionRange>();
+const removePendingImageInsertionRange = StateEffect.define<string>();
+
+export const pendingImageInsertionRangeField = StateField.define<PendingImageInsertionRange[]>({
+  create() {
+    return [];
+  },
+  update(ranges, tr) {
+    let nextRanges = ranges.map((range) => {
+      const from = tr.changes.mapPos(range.from, 1);
+      const to = tr.changes.mapPos(range.to, 1);
+      return {
+        ...range,
+        from: Math.max(0, Math.min(from, tr.newDoc.length)),
+        to: Math.max(0, Math.min(to, tr.newDoc.length)),
+      };
+    });
+
+    for (const effect of tr.effects) {
+      if (effect.is(addPendingImageInsertionRange)) {
+        nextRanges = [...nextRanges, effect.value];
+      } else if (effect.is(removePendingImageInsertionRange)) {
+        nextRanges = nextRanges.filter((range) => range.id !== effect.value);
+      }
+    }
+
+    return nextRanges.map((range) =>
+      range.to < range.from
+        ? {
+            ...range,
+            to: range.from,
+          }
+        : range,
+    );
   },
 });
 
@@ -1528,12 +1572,19 @@ function getFirstSupportedImageFile(dataTransfer: DataTransfer | null | undefine
   );
 }
 
-async function importImageFileAtSelection(
+function findPendingImageInsertionRange(state: EditorState, id: string) {
+  return state
+    .field(pendingImageInsertionRangeField, false)
+    ?.find((range) => range.id === id);
+}
+
+export async function importImageFileAtSelection(
   view: EditorView,
   file: File,
   importImageAsset: (file: File) => Promise<string>,
   position?: number | null,
 ) {
+  const id = `image-import-${++pendingImageInsertionId}`;
   const selection =
     typeof position === "number"
       ? {
@@ -1541,26 +1592,50 @@ async function importImageFileAtSelection(
           to: clampPosition(position, view.state.doc.length),
         }
       : view.state.selection.main;
-  const relativePath = await importImageAsset(file);
-  const insertion = buildMarkdownImageBlockInsertion(
-    view.state,
-    selection.from,
-    selection.to,
-    relativePath,
-    file.name,
-  );
 
   view.dispatch({
-    changes: {
+    effects: addPendingImageInsertionRange.of({
       from: selection.from,
-      insert: insertion.insert,
+      id,
       to: selection.to,
-    },
-    selection: {
-      anchor: insertion.anchor,
-    },
+    }),
   });
-  view.focus();
+
+  try {
+    const relativePath = await importImageAsset(file);
+    const pendingRange = findPendingImageInsertionRange(view.state, id);
+    if (!pendingRange) {
+      return;
+    }
+
+    const from = clampPosition(pendingRange.from, view.state.doc.length);
+    const to = Math.max(from, clampPosition(pendingRange.to, view.state.doc.length));
+    const insertion = buildMarkdownImageBlockInsertion(
+      view.state,
+      from,
+      to,
+      relativePath,
+      file.name,
+    );
+
+    view.dispatch({
+      changes: {
+        from,
+        insert: insertion.insert,
+        to,
+      },
+      effects: removePendingImageInsertionRange.of(id),
+      selection: {
+        anchor: insertion.anchor,
+      },
+    });
+    view.focus();
+  } catch (error) {
+    view.dispatch({
+      effects: removePendingImageInsertionRange.of(id),
+    });
+    throw error;
+  }
 }
 
 // Three rendered-mode collectors request the fallback ranges with the same
@@ -3350,6 +3425,7 @@ export function useCodeMirror({
 		          ])),
 	          editorPresentationModeField.init(() => editorModeRef.current),
 	          editorFocusModeField.init(() => focusModeRef.current),
+          pendingImageInsertionRangeField,
 	          threadPresentationField,
 	          threadDecorationsField,
           layer({

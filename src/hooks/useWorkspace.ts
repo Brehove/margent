@@ -866,11 +866,14 @@ export async function importWorkspaceAsset(suggestedName: string, bytes: number[
 export async function saveCurrentDocument(content: string) {
   const latest = useWorkspaceStore.getState();
 
-  if (!latest.workspace || !latest.activeDocument || latest.isSaving || !latest.isEditorDirty) {
+  if (!latest.workspace || !latest.activeDocument || latest.isSaving) {
     return;
   }
 
   const { activeDocument, workspace } = latest;
+  if (!latest.isEditorDirty && content === activeDocument.content) {
+    return;
+  }
 
   latest.setIsSaving(true);
   latest.setErrorMessage(null);

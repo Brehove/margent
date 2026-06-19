@@ -8,6 +8,7 @@ import {
   createMarkdownFile,
   deleteMarkdownFile,
   renameMarkdownFile,
+  saveCurrentDocument,
   useWorkspaceEffects,
 } from "../src/hooks/useWorkspace";
 import { useThreadStore } from "../src/stores/threadStore";
@@ -415,6 +416,69 @@ describe("workspace watcher behavior", () => {
     await act(async () => {
       watchers.triggerDocumentWatch();
     });
+
+    expect(invokeMock).not.toHaveBeenCalled();
+  });
+
+  it("saves provided content even before the global dirty flag catches up", async () => {
+    const initialDocument = makeDocument({
+      content: "# Watch Test\n\nOriginal.\n",
+      currentContentHash: "sha256:old",
+    });
+    const savedDocument = makeDocument({
+      content: "# Watch Test\n\nOriginal plus immediate edit.\n",
+      currentContentHash: "sha256:saved",
+      updatedAt: "2026-03-19T00:04:00Z",
+      wordCount: 5,
+    });
+    const workspace = makeWorkspace(initialDocument);
+
+    invokeMock.mockImplementation(async (command, args) => {
+      if (command === "save_document") {
+        expect(args).toEqual({
+          content: savedDocument.content,
+          relativePath: initialDocument.relativePath,
+          workspaceRoot: workspace.rootPath,
+        });
+        return savedDocument;
+      }
+
+      throw new Error(`Unexpected invoke command: ${command}`);
+    });
+
+    useWorkspaceStore.setState({
+      activeDocument: initialDocument,
+      isEditorDirty: false,
+      status: "ready",
+      workspace,
+    });
+
+    await saveCurrentDocument(savedDocument.content);
+
+    expect(invokeMock).toHaveBeenCalledTimes(1);
+    expect(useWorkspaceStore.getState().activeDocument?.content).toBe(savedDocument.content);
+    expect(useWorkspaceStore.getState().isEditorDirty).toBe(false);
+  });
+
+  it("does not save unchanged clean content", async () => {
+    const initialDocument = makeDocument({
+      content: "# Watch Test\n\nOriginal.\n",
+      currentContentHash: "sha256:old",
+    });
+    const workspace = makeWorkspace(initialDocument);
+
+    invokeMock.mockImplementation(async (command) => {
+      throw new Error(`Unexpected invoke command: ${command}`);
+    });
+
+    useWorkspaceStore.setState({
+      activeDocument: initialDocument,
+      isEditorDirty: false,
+      status: "ready",
+      workspace,
+    });
+
+    await saveCurrentDocument(initialDocument.content);
 
     expect(invokeMock).not.toHaveBeenCalled();
   });
