@@ -318,6 +318,115 @@ describe("DocumentEditor keyboard shortcuts", () => {
     expect(onSave).toHaveBeenCalledWith("# Autosaved\n");
   });
 
+  it("does not replace newer dirty edits with an older same-document save response", () => {
+    const session = makeSession({
+      getContent: vi.fn(() => "# Saved\n\nNewer unsaved edit.\n"),
+      isDirty: vi.fn(() => true),
+    });
+
+    mockUseCodeMirror.mockReturnValue({
+      session,
+      sessionMetrics: {
+        characterCount: 7,
+        lineCount: 2,
+      },
+      sessionSnapshot: {
+        isDirty: true,
+        revision: 2,
+      },
+      setHostElement: vi.fn(),
+    });
+
+    const baseProps = {
+      addReply: vi.fn(async () => {}),
+      createThreadFromSelection: vi.fn(async () => {}),
+      deleteThread: vi.fn(async () => {}),
+      document: makeDocumentPayload({
+        content: "# Saved\n",
+        currentContentHash: "sha256:saved",
+      }),
+      isSaving: false,
+      isThreadSaving: false,
+      loadThread: vi.fn(async () => null),
+      onDirtyChange: vi.fn(),
+      onSave: vi.fn(),
+      onThreadSelect: vi.fn(),
+      reopenThread: vi.fn(async () => {}),
+      resolveThread: vi.fn(async () => {}),
+      threads: [],
+    };
+
+    const { rerender } = render(<DocumentEditor {...baseProps} />);
+    expect(session.replaceContent).toHaveBeenCalledWith("# Saved\n");
+    vi.mocked(session.replaceContent).mockClear();
+
+    rerender(
+      <DocumentEditor
+        {...baseProps}
+        document={makeDocumentPayload({
+          content: "# Saved\n\nOlder save response.\n",
+          currentContentHash: "sha256:older-save-response",
+        })}
+      />,
+    );
+
+    expect(session.replaceContent).not.toHaveBeenCalled();
+  });
+
+  it("marks a matching same-document save response clean", () => {
+    const session = makeSession({
+      getContent: vi.fn(() => "# Saved\n\nCurrent edit.\n"),
+      isDirty: vi.fn(() => true),
+    });
+
+    mockUseCodeMirror.mockReturnValue({
+      session,
+      sessionMetrics: {
+        characterCount: 7,
+        lineCount: 2,
+      },
+      sessionSnapshot: {
+        isDirty: true,
+        revision: 2,
+      },
+      setHostElement: vi.fn(),
+    });
+
+    const baseProps = {
+      addReply: vi.fn(async () => {}),
+      createThreadFromSelection: vi.fn(async () => {}),
+      deleteThread: vi.fn(async () => {}),
+      document: makeDocumentPayload({
+        content: "# Saved\n",
+        currentContentHash: "sha256:saved",
+      }),
+      isSaving: false,
+      isThreadSaving: false,
+      loadThread: vi.fn(async () => null),
+      onDirtyChange: vi.fn(),
+      onSave: vi.fn(),
+      onThreadSelect: vi.fn(),
+      reopenThread: vi.fn(async () => {}),
+      resolveThread: vi.fn(async () => {}),
+      threads: [],
+    };
+
+    const { rerender } = render(<DocumentEditor {...baseProps} />);
+    vi.mocked(session.replaceContent).mockClear();
+
+    rerender(
+      <DocumentEditor
+        {...baseProps}
+        document={makeDocumentPayload({
+          content: "# Saved\n\nCurrent edit.\n",
+          currentContentHash: "sha256:current-edit",
+        })}
+      />,
+    );
+
+    expect(session.replaceContent).toHaveBeenCalledWith("# Saved\n\nCurrent edit.\n");
+  });
+
   it("opens editor search from the Find button", () => {
     const session = makeSession();
 

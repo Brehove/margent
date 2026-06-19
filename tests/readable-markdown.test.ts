@@ -13,6 +13,8 @@ import {
   classifyReadableMarkdownLine,
   convertClipboardHtmlToMarkdown,
   editorCompositionStateField,
+  importImageFileAtSelection,
+  pendingImageInsertionRangeField,
   readActiveFootnoteDefinition,
   readActiveMarkdownLink,
   toggleMarkdownInlineStyle,
@@ -1861,6 +1863,39 @@ describe("buildMarkdownImageBlockInsertion", () => {
     );
 
     expect(insertion.insert).toBe("![before\\[after\\]](assets/image.png)");
+  });
+
+  it("maps delayed image imports through edits made while the import is pending", async () => {
+    let resolveImport: (path: string) => void = () => {};
+    const importImageAsset = () =>
+      new Promise<string>((resolve) => {
+        resolveImport = resolve;
+      });
+    const view = new EditorView({
+      state: EditorState.create({
+        doc: "Hello",
+        extensions: [pendingImageInsertionRangeField],
+        selection: {
+          anchor: "Hello".length,
+        },
+      }),
+    });
+    const file = new File(["image-bytes"], "shot.png", {
+      type: "image/png",
+    });
+
+    const importPromise = importImageFileAtSelection(view, file, importImageAsset);
+    view.dispatch({
+      changes: {
+        from: "Hello".length,
+        insert: " world",
+      },
+    });
+    resolveImport("assets/shot.png");
+    await importPromise;
+
+    expect(view.state.doc.toString()).toBe("Hello world\n\n![shot](assets/shot.png)");
+    view.destroy();
   });
 });
 

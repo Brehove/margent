@@ -209,6 +209,7 @@ export const DocumentEditor = memo(function DocumentEditor({
   const activeThreadCardRef = useRef<HTMLElement | null>(null);
   const createCardRef = useRef<HTMLElement | null>(null);
   const createAnchorRectRef = useRef<DOMRect | null>(null);
+  const loadedDocumentIdRef = useRef<string | null>(null);
   const loadThreadRef = useRef(loadThread);
   const [replyBody, setReplyBody] = useState("");
   const [documentAgentPrompt, setDocumentAgentPrompt] = useState("");
@@ -356,11 +357,20 @@ export const DocumentEditor = memo(function DocumentEditor({
 
   useEffect(() => {
     if (!document) {
+      loadedDocumentIdRef.current = null;
+      return;
+    }
+
+    const isSameDocument = loadedDocumentIdRef.current === document.id;
+    const hasNewerLocalEdits =
+      isSameDocument && session.isDirty() && session.getContent() !== document.content;
+    if (hasNewerLocalEdits) {
       return;
     }
 
     setPendingLinkSelection(null);
     session.replaceContent(document.content);
+    loadedDocumentIdRef.current = document.id;
   }, [document?.content, document?.currentContentHash, document?.id, session]);
 
   useEffect(() => {
