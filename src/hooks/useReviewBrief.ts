@@ -11,6 +11,7 @@ interface UseReviewBriefOptions {
   activeDocument: DocumentPayload | null;
   onActiveDocumentApplied?: (document: DocumentPayload) => void;
   onActiveThreadUpdated?: (thread: ThreadRecord) => void;
+  onRefreshReviewData?: () => Promise<void>;
   workspace: WorkspaceSnapshot | null;
 }
 
@@ -20,15 +21,15 @@ export function useReviewBrief({
   activeDocument,
   onActiveDocumentApplied,
   onActiveThreadUpdated,
+  onRefreshReviewData,
   workspace,
 }: UseReviewBriefOptions) {
   const [activeActionId, setActiveActionId] = useState<string | null>(null);
   const [activeActionKind, setActiveActionKind] = useState<BriefActionKind>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
-  const [isBriefLoading, setIsBriefLoading] = useState(false);
+  const reviewDataErrorMessage = useReviewDataStore((state) => state.errorMessage);
   const isLoading = useReviewDataStore((state) => state.isLoading);
   const proposals = useReviewDataStore((state) => state.proposals);
-  const setReviewData = useReviewDataStore((state) => state.setReviewData);
   const threads = useReviewDataStore((state) => state.threads);
   const upsertReviewProposal = useReviewDataStore((state) => state.upsertProposal);
   const upsertReviewThread = useReviewDataStore((state) => state.upsertThread);
@@ -44,32 +45,13 @@ export function useReviewBrief({
   );
 
   const loadBrief = useCallback(async () => {
-    if (!workspaceRoot) {
+    if (!workspaceRoot || !onRefreshReviewData) {
       return;
     }
 
-    setIsBriefLoading(true);
     setErrorMessage(null);
-
-    try {
-      const [nextThreads, nextProposals] = await Promise.all([
-        invokeBackend<ThreadRecord[]>("load_all_threads", {
-          workspaceRoot,
-        }),
-        invokeBackend<ProposalRecord[]>("load_all_proposals", {
-          workspaceRoot,
-        }),
-      ]);
-      setReviewData({
-        proposals: nextProposals,
-        threads: nextThreads,
-      });
-    } catch (error) {
-      setErrorMessage(getErrorMessage(error, "Unable to load the Review Brief."));
-    } finally {
-      setIsBriefLoading(false);
-    }
-  }, [setReviewData, workspaceRoot]);
+    await onRefreshReviewData();
+  }, [onRefreshReviewData, workspaceRoot]);
 
   const upsertBriefProposal = useCallback((proposal: ProposalRecord) => {
     upsertReviewProposal(proposal);
@@ -205,8 +187,8 @@ export function useReviewBrief({
       activeActionId,
       activeActionKind,
       entries,
-      errorMessage,
-      isLoading: isLoading || isBriefLoading,
+      errorMessage: errorMessage ?? reviewDataErrorMessage,
+      isLoading,
       loadBrief,
       rejectProposal,
       replyToThread,
@@ -218,10 +200,10 @@ export function useReviewBrief({
       activeActionKind,
       entries,
       errorMessage,
-      isBriefLoading,
       isLoading,
       loadBrief,
       rejectProposal,
+      reviewDataErrorMessage,
       replyToThread,
       resolvedCount,
     ],

@@ -139,7 +139,7 @@ function App() {
   const [providerReadinessError, setProviderReadinessError] = useState<string | null>(null);
   const [reviewPasses, setReviewPasses] = useState<ReviewPassSummary[]>([]);
   const focusChromeFadeTimeoutRef = useRef<number | null>(null);
-  useReviewData({
+  const reviewDataState = useReviewData({
     activeDocument,
     workspace,
   });
@@ -162,6 +162,7 @@ function App() {
     activeDocument,
     onActiveDocumentApplied: setActiveDocument,
     onActiveThreadUpdated: upsertThread,
+    onRefreshReviewData: reviewDataState.loadReviewData,
     workspace,
   });
   const [providerActionState, setProviderActionState] = useState<ProviderActionState>({
@@ -820,7 +821,6 @@ function App() {
         break;
       case "review-brief":
         setAppView("review-brief");
-        void reviewBriefState.loadBrief();
         break;
       case "rename-active-file": {
         if (!activeDocument) {
@@ -850,7 +850,6 @@ function App() {
     loadProviderReadiness,
     openRecentWorkspace,
     requestFileAction,
-    reviewBriefState,
     runDocumentExport,
     runPdfExport,
   ]);
@@ -1422,9 +1421,6 @@ function App() {
                 setAppView((current) =>
                   current === "review-brief" ? "editor" : "review-brief",
                 );
-                if (appView !== "review-brief") {
-                  void reviewBriefState.loadBrief();
-                }
               }}
             >
               Review Brief
