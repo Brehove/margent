@@ -21,6 +21,7 @@ import { getErrorMessage } from "./lib/errorMessage";
 import { invokeBackend, isDesktopBackend, listenBackend } from "./lib/backend";
 import { useProposals } from "./hooks/useProposals";
 import { useReviewBrief } from "./hooks/useReviewBrief";
+import { useReviewData } from "./hooks/useReviewData";
 import { useThreads } from "./hooks/useThreads";
 import {
   createMarkdownFile,
@@ -137,6 +138,10 @@ function App() {
   const [providerReadinessError, setProviderReadinessError] = useState<string | null>(null);
   const [reviewPasses, setReviewPasses] = useState<ReviewPassSummary[]>([]);
   const focusChromeFadeTimeoutRef = useRef<number | null>(null);
+  useReviewData({
+    activeDocument,
+    workspace,
+  });
   const threadState = useThreads({
     activeDocument,
     workspace,
