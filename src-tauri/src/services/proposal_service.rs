@@ -1098,7 +1098,9 @@ fn load_document_context(
     workspace_root: &Path,
     document_id: &str,
 ) -> Result<(DocumentRecord, PathBuf, String), String> {
-    if let Some(record) = file_service::read_document_record_by_id(workspace_root, document_id)? {
+    if let Some(record) =
+        workspace_service::hydrate_document_record_by_id(workspace_root, document_id)?
+    {
         let document_path =
             file_service::resolve_document_path(workspace_root, &record.relative_path)?;
         let content = fs::read_to_string(&document_path)
