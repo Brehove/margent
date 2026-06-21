@@ -14,6 +14,7 @@ use walkdir::WalkDir;
 use crate::models::*;
 
 const ANCHOR_CONTEXT_RADIUS: usize = 48;
+const MAX_SNAPSHOTS_PER_DOCUMENT: usize = 50;
 const STALE_PROPOSAL_WARNING: &str =
     "This proposal targets an older saved document hash and should be regenerated.";
 
@@ -1279,6 +1280,7 @@ pub fn snapshot_document(
     };
     let path = md.join("snapshots").join(format!("{snapshot_id}.json"));
     write_json(&path, &record)?;
+    prune_document_snapshots(&md, &document.id)?;
     append_event(
         root,
         "document.snapshot",
@@ -1288,6 +1290,30 @@ pub fn snapshot_document(
         Some(reason),
     )?;
     Ok(record)
+}
+
+fn prune_document_snapshots(mdreview_path: &Path, document_id: &str) -> Result<(), String> {
+    let snapshots_dir = mdreview_path.join("snapshots");
+    let mut snapshots = Vec::new();
+
+    for path in json_files_in_directory(&snapshots_dir)? {
+        let Some(snapshot) = read_json_from_scan::<DocumentSnapshotRecord>(&path, "snapshot")?
+        else {
+            continue;
+        };
+
+        if snapshot.document_id == document_id {
+            snapshots.push((snapshot.created_at, snapshot.id, path));
+        }
+    }
+
+    snapshots.sort_by(|left, right| right.0.cmp(&left.0).then_with(|| right.1.cmp(&left.1)));
+
+    for (_, _, path) in snapshots.into_iter().skip(MAX_SNAPSHOTS_PER_DOCUMENT) {
+        remove_file_if_exists(&path)?;
+    }
+
+    Ok(())
 }
 
 pub fn revert_latest_snapshot(
@@ -1327,7 +1353,12 @@ fn load_latest_snapshot(
             snapshots.push(snapshot);
         }
     }
-    snapshots.sort_by(|left, right| right.created_at.cmp(&left.created_at));
+    snapshots.sort_by(|left, right| {
+        right
+            .created_at
+            .cmp(&left.created_at)
+            .then_with(|| right.id.cmp(&left.id))
+    });
     snapshots
         .into_iter()
         .next()
@@ -2556,6 +2587,45 @@ mod tests {
                 .expect("load restored document")
                 .current_content_hash,
             content_hash("# Draft\n\nOriginal body.\n")
+        );
+
+        fs::remove_dir_all(&root).expect("cleanup temp root");
+    }
+
+    #[test]
+    fn snapshot_document_prunes_old_document_snapshots() {
+        let root = unique_temp_dir("margent-cli-snapshot-retention");
+        fs::create_dir_all(&root).expect("create temp root");
+
+        let document_path = root.join("draft.md");
+        fs::write(&document_path, "Alpha beta\n").expect("write doc");
+        ensure_workspace_layout(&root).expect("init layout");
+        let document =
+            upsert_document_record(&root, "draft.md", "Alpha beta\n").expect("index document");
+
+        for index in 0..(MAX_SNAPSHOTS_PER_DOCUMENT + 5) {
+            snapshot_document(
+                &root,
+                &document,
+                &format!("Snapshot {index}\n"),
+                "test",
+                None,
+            )
+            .expect("snapshot document");
+        }
+
+        let snapshots_dir = root.join(".mdreview").join("snapshots");
+        let snapshot_count = fs::read_dir(&snapshots_dir)
+            .expect("read snapshots")
+            .filter_map(Result::ok)
+            .filter(|entry| entry.path().is_file())
+            .count();
+        assert_eq!(snapshot_count, MAX_SNAPSHOTS_PER_DOCUMENT);
+
+        let latest = load_latest_snapshot(&root, Some("draft.md")).expect("load latest snapshot");
+        assert_eq!(
+            latest.content,
+            format!("Snapshot {}\n", MAX_SNAPSHOTS_PER_DOCUMENT + 4)
         );
 
         fs::remove_dir_all(&root).expect("cleanup temp root");
