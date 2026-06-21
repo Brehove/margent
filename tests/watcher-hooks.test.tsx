@@ -3,6 +3,7 @@ import { render, waitFor, cleanup, act } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { invoke, isTauri } from "@tauri-apps/api/core";
 import { watch, type WatchEvent } from "@tauri-apps/plugin-fs";
+import { useReviewData } from "../src/hooks/useReviewData";
 import { useThreads } from "../src/hooks/useThreads";
 import {
   createMarkdownFile,
@@ -12,7 +13,9 @@ import {
   useWorkspaceEffects,
 } from "../src/hooks/useWorkspace";
 import { useThreadStore } from "../src/stores/threadStore";
+import { useReviewDataStore } from "../src/stores/reviewDataStore";
 import { useWorkspaceStore } from "../src/stores/workspaceStore";
+import type { ProposalRecord } from "../src/types/proposal";
 import type { AnchorRecord, ThreadRecord } from "../src/types/thread";
 import type { DocumentPayload, WorkspaceSnapshot } from "../src/types/workspace";
 
@@ -20,7 +23,7 @@ const invokeMock = vi.mocked(invoke);
 const isTauriMock = vi.mocked(isTauri);
 const watchMock = vi.mocked(watch);
 const SETTLED_DOCUMENT_REFRESH_DELAY_MS = 350;
-const SETTLED_THREAD_REFRESH_DELAY_MS = 350;
+const SETTLED_REVIEW_REFRESH_DELAY_MS = 350;
 
 const baseAnchor: AnchorRecord = {
   quote: "Alpha beta gamma.",
@@ -110,6 +113,31 @@ function makeThread(overrides: Partial<ThreadRecord> = {}): ThreadRecord {
   };
 }
 
+function makeProposal(overrides: Partial<ProposalRecord> = {}): ProposalRecord {
+  return {
+    schemaVersion: 1,
+    id: "proposal-1",
+    documentId: "doc-1",
+    threadIds: ["thread-1"],
+    adapterId: "codex",
+    createdAt: "2026-03-19T00:00:00Z",
+    updatedAt: "2026-03-19T00:00:00Z",
+    status: "pending",
+    baseContentHash: "sha256:old",
+    responseMode: "updated_document",
+    summary: "Proposal",
+    assistantMessage: "Updated text.",
+    updatedDocumentText: "Updated text.",
+    unifiedDiff: null,
+    computedDiff: "",
+    warnings: [],
+    resolveThreadIds: [],
+    stderr: null,
+    errorMessage: null,
+    ...overrides,
+  };
+}
+
 function WorkspaceEffectsHarness() {
   useWorkspaceEffects();
   return null;
@@ -122,6 +150,7 @@ function ThreadsHarness({
   activeDocument: DocumentPayload | null;
   workspace: WorkspaceSnapshot | null;
 }) {
+  useReviewData({ activeDocument, workspace });
   useThreads({ activeDocument, workspace });
   return null;
 }
@@ -167,6 +196,7 @@ beforeEach(() => {
   watchMock.mockReset();
   useWorkspaceStore.getState().reset();
   useThreadStore.getState().reset();
+  useReviewDataStore.getState().reset();
   isTauriMock.mockReturnValue(true);
 });
 
@@ -892,7 +922,7 @@ describe("workspace file operations", () => {
 });
 
 describe("thread watcher behavior", () => {
-  it("reloads threads when the watched thread signature changes", async () => {
+  it("reloads active threads when shared review data changes", async () => {
     const activeDocument = makeDocument();
     const workspace = makeWorkspace(activeDocument);
     const initialThread = makeThread({
@@ -914,12 +944,12 @@ describe("thread watcher behavior", () => {
       return vi.fn();
     });
     invokeMock.mockImplementation(async (command) => {
-      if (command === "load_threads") {
+      if (command === "load_all_threads") {
         return hasExternalThreadChange ? [updatedThread] : [initialThread];
       }
 
-      if (command === "check_thread_update_signature") {
-        return hasExternalThreadChange ? "sig-updated" : "sig-initial";
+      if (command === "load_all_proposals") {
+        return [];
       }
 
       throw new Error(`Unexpected invoke command: ${command}`);
@@ -979,12 +1009,12 @@ describe("thread watcher behavior", () => {
       return vi.fn();
     });
     invokeMock.mockImplementation(async (command) => {
-      if (command === "load_threads") {
+      if (command === "load_all_threads") {
         return externalChangeVisible ? [updatedThread] : [initialThread];
       }
 
-      if (command === "check_thread_update_signature") {
-        return externalChangeVisible ? "sig-updated" : "sig-initial";
+      if (command === "load_all_proposals") {
+        return [];
       }
 
       throw new Error(`Unexpected invoke command: ${command}`);
@@ -1003,7 +1033,7 @@ describe("thread watcher behavior", () => {
 
     await act(async () => {
       await new Promise((resolve) =>
-        window.setTimeout(resolve, SETTLED_THREAD_REFRESH_DELAY_MS + 50),
+        window.setTimeout(resolve, SETTLED_REVIEW_REFRESH_DELAY_MS + 50),
       );
     });
 
@@ -1011,24 +1041,44 @@ describe("thread watcher behavior", () => {
     expect(useThreadStore.getState().threads[0]?.messages).toHaveLength(1);
   });
 
-  it("suppresses thread watcher refresh while a thread mutation is saving", async () => {
+  it("refreshes proposals and active threads from the same review watcher", async () => {
     const activeDocument = makeDocument();
     const workspace = makeWorkspace(activeDocument);
-    const initialThread = makeThread();
+    const initialThread = makeThread({
+      id: "thread-1",
+      updatedAt: "2026-03-19T00:00:00Z",
+      title: "Initial thread",
+    });
+    const updatedThread = makeThread({
+      id: "thread-1",
+      updatedAt: "2026-03-19T00:07:00Z",
+      title: "Shared watcher thread",
+    });
+    const initialProposal = makeProposal({
+      id: "proposal-1",
+      updatedAt: "2026-03-19T00:00:00Z",
+      summary: "Initial proposal",
+    });
+    const updatedProposal = makeProposal({
+      id: "proposal-1",
+      updatedAt: "2026-03-19T00:07:00Z",
+      summary: "Shared watcher proposal",
+    });
 
     let threadsWatchCallback: (() => void) | null = null;
+    let externalChangeVisible = false;
 
     watchMock.mockImplementation(async (_path, callback) => {
       threadsWatchCallback = () => callback({});
       return vi.fn();
     });
     invokeMock.mockImplementation(async (command) => {
-      if (command === "load_threads") {
-        return [initialThread];
+      if (command === "load_all_threads") {
+        return externalChangeVisible ? [updatedThread] : [initialThread];
       }
 
-      if (command === "check_thread_update_signature") {
-        return "sig-initial";
+      if (command === "load_all_proposals") {
+        return externalChangeVisible ? [updatedProposal] : [initialProposal];
       }
 
       throw new Error(`Unexpected invoke command: ${command}`);
@@ -1036,17 +1086,119 @@ describe("thread watcher behavior", () => {
 
     render(createElement(ThreadsHarness, { activeDocument, workspace }));
 
-    await waitFor(() => expect(useThreadStore.getState().threads).toHaveLength(1));
-    invokeMock.mockClear();
-    act(() => {
-      useThreadStore.getState().setIsSaving(true);
-    });
+    await waitFor(() => expect(useThreadStore.getState().threads[0]?.title).toBe("Initial thread"));
+    await waitFor(() =>
+      expect(useReviewDataStore.getState().proposals[0]?.summary).toBe("Initial proposal"),
+    );
 
     await act(async () => {
+      externalChangeVisible = true;
       threadsWatchCallback?.();
     });
 
-    expect(invokeMock).not.toHaveBeenCalled();
+    await waitFor(() =>
+      expect(useThreadStore.getState().threads[0]?.title).toBe("Shared watcher thread"),
+    );
+    expect(useReviewDataStore.getState().proposals[0]?.summary).toBe("Shared watcher proposal");
+  });
+
+  it("ignores stale shared review data after switching workspaces", async () => {
+    const firstDocument = makeDocument({
+      id: "doc-first",
+      relativePath: "first.md",
+      absolutePath: "/tmp/margent-watch-first/first.md",
+      displayName: "first.md",
+    });
+    const secondDocument = makeDocument({
+      id: "doc-second",
+      relativePath: "second.md",
+      absolutePath: "/tmp/margent-watch-second/second.md",
+      displayName: "second.md",
+    });
+    const firstWorkspace = {
+      ...makeWorkspace(firstDocument),
+      mdreviewPath: "/tmp/margent-watch-first/.mdreview",
+      rootPath: "/tmp/margent-watch-first",
+    };
+    const secondWorkspace = {
+      ...makeWorkspace(secondDocument),
+      mdreviewPath: "/tmp/margent-watch-second/.mdreview",
+      rootPath: "/tmp/margent-watch-second",
+    };
+    const firstThread = makeThread({
+      documentId: "doc-first",
+      id: "thread-first",
+      title: "First workspace thread",
+    });
+    const secondThread = makeThread({
+      documentId: "doc-second",
+      id: "thread-second",
+      title: "Second workspace thread",
+    });
+
+    let resolveFirstThreads: ((threads: ThreadRecord[]) => void) | null = null;
+    let resolveFirstProposals: ((proposals: ProposalRecord[]) => void) | null = null;
+
+    watchMock.mockImplementation(async () => vi.fn());
+    invokeMock.mockImplementation(async (command, args) => {
+      if (command === "load_all_threads") {
+        if (args.workspaceRoot === firstWorkspace.rootPath) {
+          return new Promise<ThreadRecord[]>((resolve) => {
+            resolveFirstThreads = resolve;
+          });
+        }
+
+        if (args.workspaceRoot === secondWorkspace.rootPath) {
+          return [secondThread];
+        }
+      }
+
+      if (command === "load_all_proposals") {
+        if (args.workspaceRoot === firstWorkspace.rootPath) {
+          return new Promise<ProposalRecord[]>((resolve) => {
+            resolveFirstProposals = resolve;
+          });
+        }
+
+        if (args.workspaceRoot === secondWorkspace.rootPath) {
+          return [];
+        }
+      }
+
+      throw new Error(`Unexpected invoke command: ${command}`);
+    });
+
+    const { rerender } = render(
+      createElement(ThreadsHarness, {
+        activeDocument: firstDocument,
+        workspace: firstWorkspace,
+      }),
+    );
+
+    await waitFor(() => {
+      expect(resolveFirstThreads).not.toBeNull();
+      expect(resolveFirstProposals).not.toBeNull();
+    });
+
+    rerender(
+      createElement(ThreadsHarness, {
+        activeDocument: secondDocument,
+        workspace: secondWorkspace,
+      }),
+    );
+
+    await waitFor(() =>
+      expect(useThreadStore.getState().threads[0]?.title).toBe("Second workspace thread"),
+    );
+
+    await act(async () => {
+      resolveFirstThreads?.([firstThread]);
+      resolveFirstProposals?.([]);
+      await Promise.resolve();
+    });
+
+    expect(useThreadStore.getState().threads[0]?.title).toBe("Second workspace thread");
+    expect(useReviewDataStore.getState().threads[0]?.title).toBe("Second workspace thread");
   });
 
   it("refreshes threads when the app regains focus even if no watcher event fired", async () => {
@@ -1081,12 +1233,12 @@ describe("thread watcher behavior", () => {
 
     watchMock.mockImplementation(async () => vi.fn());
     invokeMock.mockImplementation(async (command) => {
-      if (command === "load_threads") {
+      if (command === "load_all_threads") {
         return externalChangeVisible ? [updatedThread] : [initialThread];
       }
 
-      if (command === "check_thread_update_signature") {
-        return externalChangeVisible ? "sig-updated" : "sig-initial";
+      if (command === "load_all_proposals") {
+        return [];
       }
 
       throw new Error(`Unexpected invoke command: ${command}`);

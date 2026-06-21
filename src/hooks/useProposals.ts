@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { invokeBackend } from "../lib/backend";
 import { getErrorMessage } from "../lib/errorMessage";
+import { proposalsForDocument, useReviewDataStore } from "../stores/reviewDataStore";
 import type { ProposalMutationResult, ProposalRecord } from "../types/proposal";
 import type { DocumentPayload, WorkspaceSnapshot } from "../types/workspace";
 
@@ -22,12 +23,18 @@ export function useProposals({
   const [activeActionKind, setActiveActionKind] = useState<ProposalActionKind>(null);
   const [activeActionProposalId, setActiveActionProposalId] = useState<string | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
-  const [isLoading, setIsLoading] = useState(false);
-  const [proposals, setProposals] = useState<ProposalRecord[]>([]);
+  const [isProposalLoading, setIsProposalLoading] = useState(false);
+  const isLoading = useReviewDataStore((state) => state.isLoading);
+  const allProposals = useReviewDataStore((state) => state.proposals);
+  const setDocumentProposals = useReviewDataStore((state) => state.setDocumentProposals);
+  const upsertReviewProposal = useReviewDataStore((state) => state.upsertProposal);
+  const proposals = useMemo(
+    () => proposalsForDocument(allProposals, activeDocument?.id),
+    [activeDocument?.id, allProposals],
+  );
 
   useEffect(() => {
     if (!workspace || !activeDocument) {
-      setProposals([]);
       return;
     }
 
@@ -48,7 +55,7 @@ export function useProposals({
       return;
     }
 
-    setIsLoading(true);
+    setIsProposalLoading(true);
     setErrorMessage(null);
 
     try {
@@ -56,13 +63,13 @@ export function useProposals({
         documentId,
         workspaceRoot,
       });
-      setProposals(nextProposals);
+      setDocumentProposals(documentId, nextProposals);
     } catch (error) {
       setErrorMessage(getErrorMessage(error, "Unable to load proposal records."));
     } finally {
-      setIsLoading(false);
+      setIsProposalLoading(false);
     }
-  }, [activeDocument?.id, workspace?.rootPath]);
+  }, [activeDocument?.id, setDocumentProposals, workspace?.rootPath]);
 
   const acceptProposal = useCallback(async (proposalId: string, updatedDocumentText?: string) => {
     if (!workspace) {
@@ -79,7 +86,7 @@ export function useProposals({
         updatedDocumentText,
         workspaceRoot: workspace.rootPath,
       });
-      upsertProposal(result.proposal);
+      upsertReviewProposal(result.proposal);
 
       if (result.document) {
         onDocumentApplied?.(result.document);
@@ -94,7 +101,7 @@ export function useProposals({
       setActiveActionKind(null);
       setActiveActionProposalId(null);
     }
-  }, [onDocumentApplied, workspace]);
+  }, [onDocumentApplied, upsertReviewProposal, workspace]);
 
   const rejectProposal = useCallback(async (proposalId: string) => {
     if (!workspace) {
@@ -110,7 +117,7 @@ export function useProposals({
         proposalId,
         workspaceRoot: workspace.rootPath,
       });
-      upsertProposal(result.proposal);
+      upsertReviewProposal(result.proposal);
 
       if (result.message) {
         setErrorMessage(result.message);
@@ -121,13 +128,11 @@ export function useProposals({
       setActiveActionKind(null);
       setActiveActionProposalId(null);
     }
-  }, [workspace]);
+  }, [upsertReviewProposal, workspace]);
 
   const upsertProposal = useCallback((proposal: ProposalRecord) => {
-    setProposals((current) =>
-      sortProposals([proposal, ...current.filter((entry) => entry.id !== proposal.id)]),
-    );
-  }, []);
+    upsertReviewProposal(proposal);
+  }, [upsertReviewProposal]);
 
   return useMemo(
     () => ({
@@ -135,7 +140,7 @@ export function useProposals({
       activeActionKind,
       activeActionProposalId,
       errorMessage,
-      isLoading,
+      isLoading: isLoading || isProposalLoading,
       loadProposals,
       proposals,
       rejectProposal,
@@ -147,6 +152,7 @@ export function useProposals({
       activeActionKind,
       activeActionProposalId,
       errorMessage,
+      isProposalLoading,
       isLoading,
       loadProposals,
       proposals,
@@ -154,8 +160,4 @@ export function useProposals({
       upsertProposal,
     ],
   );
-}
-
-function sortProposals(proposals: ProposalRecord[]) {
-  return [...proposals].sort((left, right) => right.createdAt.localeCompare(left.createdAt));
 }
