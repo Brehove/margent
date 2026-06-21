@@ -480,13 +480,15 @@ impl McpServer {
     fn tool_accept_proposal(&self, args: &Value) -> Result<Value, String> {
         let proposal_id = required_string(args, "proposalId")?;
         let result = workspace::accept_proposal(&self.root, &proposal_id, None)?;
-        Ok(json!({ "result": result, "action": "accepted" }))
+        let action = result.status.as_str();
+        Ok(json!({ "result": result, "action": action }))
     }
 
     fn tool_reject_proposal(&self, args: &Value) -> Result<Value, String> {
         let proposal_id = required_string(args, "proposalId")?;
         let result = workspace::reject_proposal(&self.root, &proposal_id)?;
-        Ok(json!({ "result": result, "action": "rejected" }))
+        let action = result.status.as_str();
+        Ok(json!({ "result": result, "action": action }))
     }
 
     fn tool_propose_thread_replacement(&self, args: &Value) -> Result<Value, String> {

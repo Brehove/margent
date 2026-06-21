@@ -13,7 +13,8 @@ use margent_core::change_set::{
 use crate::models::adapter::AdapterDefinition;
 use crate::models::document::{DocumentRecord, DocumentVersion};
 use crate::models::proposal::{
-    ProposalChangeSetResult, ProposalHunkAcceptResult, ProposalMutationResult, ProposalRecord,
+    ProposalChangeSetResult, ProposalHunkAcceptResult, ProposalMutationResult,
+    ProposalMutationStatus, ProposalRecord,
 };
 use crate::models::thread::ThreadRecord;
 
@@ -282,6 +283,7 @@ pub fn accept_proposal(
         "failed" => return Err("Failed proposals cannot be accepted.".into()),
         "stale" => {
             return Ok(ProposalMutationResult {
+                status: ProposalMutationStatus::Stale,
                 proposal: compact_terminal_proposal_for_response(proposal),
                 document: None,
                 snapshot: None,
@@ -305,6 +307,7 @@ pub fn accept_proposal(
         mark_proposal_stale(root_path, &mut proposal)?;
 
         return Ok(ProposalMutationResult {
+            status: ProposalMutationStatus::Stale,
             proposal: compact_terminal_proposal_for_response(proposal),
             document: None,
             snapshot: None,
@@ -365,6 +368,7 @@ pub fn accept_proposal(
     timing.mark("refresh pending proposals");
 
     Ok(ProposalMutationResult {
+        status: ProposalMutationStatus::Accepted,
         proposal: compact_terminal_proposal_for_response(proposal),
         document: Some(document),
         snapshot: Some(snapshot),
@@ -393,6 +397,7 @@ pub fn reject_proposal(
     append_proposal_event_for_record(root_path, "proposal.rejected", &proposal)?;
 
     Ok(ProposalMutationResult {
+        status: ProposalMutationStatus::Rejected,
         proposal: compact_terminal_proposal_for_response(proposal),
         document: None,
         snapshot: None,
@@ -1472,6 +1477,7 @@ printf '%s' '{"status":"ok","responseMode":"updated_document","assistantMessage"
         )
         .expect("hash mismatch returns stale result");
 
+        assert_eq!(result.status, ProposalMutationStatus::Stale);
         assert_eq!(result.proposal.status, "stale");
         assert!(result.document.is_none());
         assert!(result.snapshot.is_none());
@@ -1530,6 +1536,7 @@ printf '%s' '{"status":"ok","responseMode":"updated_document","assistantMessage"
         )
         .expect("accept proposal");
 
+        assert_eq!(result.status, ProposalMutationStatus::Accepted);
         assert_eq!(result.proposal.status, "accepted");
         assert_eq!(
             result.proposal.resolve_thread_ids,
@@ -1683,6 +1690,7 @@ printf '%s' '{"status":"ok","responseMode":"updated_document","assistantMessage"
         };
 
         assert_eq!(applied_hunk_ids, selected_hunk_ids);
+        assert_eq!(result.status, ProposalMutationStatus::Accepted);
         assert_eq!(result.proposal.status, "accepted");
         assert!(result.snapshot.is_some());
         assert_eq!(
@@ -1744,6 +1752,7 @@ printf '%s' '{"status":"ok","responseMode":"updated_document","assistantMessage"
             panic!("expected applied result");
         };
 
+        assert_eq!(result.status, ProposalMutationStatus::Accepted);
         assert_eq!(result.proposal.status, "accepted");
         assert_eq!(
             fs::read_to_string(&document_path).expect("read accepted document"),
@@ -1945,6 +1954,7 @@ printf '%s' '{"status":"ok","responseMode":"updated_document","assistantMessage"
         let rejected = reject_proposal(workspace_root.to_str().expect("root str"), &proposal.id)
             .expect("reject proposal");
 
+        assert_eq!(rejected.status, ProposalMutationStatus::Rejected);
         assert_eq!(rejected.proposal.status, "rejected");
 
         let persisted_proposals =

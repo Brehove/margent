@@ -27,6 +27,24 @@ pub struct ProposalRecord {
     pub extra: Map<String, Value>,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ProposalMutationStatus {
+    Accepted,
+    Rejected,
+    Stale,
+}
+
+impl ProposalMutationStatus {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Accepted => "accepted",
+            Self::Rejected => "rejected",
+            Self::Stale => "stale",
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use serde_json::json;
@@ -68,5 +86,21 @@ mod tests {
         let serialized = serde_json::to_value(&record).expect("serialize proposal");
         assert_eq!(serialized["futureField"], json!({"kept": true}));
         assert_eq!(serialized["schemaVersion"], json!(2));
+    }
+
+    #[test]
+    fn proposal_mutation_status_serializes_as_contract_string() {
+        assert_eq!(
+            serde_json::to_value(ProposalMutationStatus::Accepted).expect("serialize status"),
+            json!("accepted")
+        );
+        assert_eq!(
+            serde_json::to_value(ProposalMutationStatus::Rejected).expect("serialize status"),
+            json!("rejected")
+        );
+        assert_eq!(
+            serde_json::to_value(ProposalMutationStatus::Stale).expect("serialize status"),
+            json!("stale")
+        );
     }
 }

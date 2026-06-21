@@ -94,6 +94,7 @@ export type ProposalChangeSetResult =
     };
 
 export interface ProposalMutationResult {
+  status: "accepted" | "rejected" | "stale";
   proposal: ProposalRecord;
   document: DocumentPayload | null;
   snapshot: DocumentSnapshotRecord | null;
