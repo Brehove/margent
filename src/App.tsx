@@ -113,7 +113,6 @@ function App() {
   const isFocusModeEnabled = useUiStore((state) => state.isFocusModeEnabled);
   const isWorkspacePaneCollapsed = useUiStore((state) => state.isWorkspacePaneCollapsed);
   const preferredReviewPassName = useUiStore((state) => state.preferredReviewPassName);
-  const pendingExternalDocument = useWorkspaceStore((state) => state.pendingExternalDocument);
   const saveConflict = useWorkspaceStore((state) => state.saveConflict);
   const setActiveDocument = useWorkspaceStore((state) => state.setActiveDocument);
   const setPreferredReviewPassName = useUiStore((state) => state.setPreferredReviewPassName);
@@ -153,7 +152,6 @@ function App() {
   } = threadState;
   const proposalState = useProposals({
     activeDocument,
-    externalDocument: pendingExternalDocument,
     onDocumentApplied: setActiveDocument,
     workspace,
   });
