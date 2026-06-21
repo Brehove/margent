@@ -209,6 +209,7 @@ fn write_critic_proposal(
         resolve_thread_ids: Vec::new(),
         stderr: None,
         error_message: None,
+        extra: Default::default(),
     };
 
     workspace::save_proposal(root, &proposal)?;

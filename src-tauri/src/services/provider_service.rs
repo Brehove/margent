@@ -544,7 +544,8 @@ fn load_document_context(
             continue;
         }
 
-        let Some(record) = file_service::read_optional_json::<DocumentRecord>(&path)? else {
+        let Some(record) = file_service::read_scanned_json::<DocumentRecord>(&path, "document")?
+        else {
             continue;
         };
 
@@ -2189,6 +2190,7 @@ fn write_provider_revision_proposal(
         resolve_thread_ids: resolve_thread_ids.to_vec(),
         stderr: None,
         error_message: None,
+        extra: Default::default(),
     };
 
     save_proposal_record(workspace_root, &proposal)?;

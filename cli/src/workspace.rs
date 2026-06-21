@@ -168,7 +168,11 @@ pub fn append_ndjson<T: serde::Serialize>(path: &Path, value: &T) -> Result<(), 
         .create(true)
         .open(path)
         .map_err(|e| format!("Unable to open {}: {e}", path.display()))?;
-    writeln!(file, "{line}").map_err(|e| format!("Unable to append to {}: {e}", path.display()))
+    writeln!(file, "{line}").map_err(|e| format!("Unable to append to {}: {e}", path.display()))?;
+    file.flush()
+        .map_err(|e| format!("Unable to flush {}: {e}", path.display()))?;
+    file.sync_data()
+        .map_err(|e| format!("Unable to sync {}: {e}", path.display()))
 }
 
 // ── Document helpers ────────────────────────────────────────────────────────
@@ -613,7 +617,9 @@ pub fn migrate_legacy_thread_records(root: &Path) -> Result<(usize, usize), Stri
 }
 
 fn normalize_thread_record(mut normalized: ThreadRecord) -> ThreadRecord {
-    normalized.schema_version = CURRENT_THREAD_SCHEMA_VERSION;
+    if normalized.schema_version < CURRENT_THREAD_SCHEMA_VERSION {
+        normalized.schema_version = CURRENT_THREAD_SCHEMA_VERSION;
+    }
     if normalized.anchor.kind.trim().is_empty() {
         normalized.anchor.kind = "text_span".into();
     }
@@ -627,7 +633,7 @@ fn normalize_thread_record(mut normalized: ThreadRecord) -> ThreadRecord {
 }
 
 fn thread_needs_migration(thread: &ThreadRecord) -> bool {
-    thread.schema_version != CURRENT_THREAD_SCHEMA_VERSION
+    thread.schema_version < CURRENT_THREAD_SCHEMA_VERSION
         || thread.anchor.kind.trim().is_empty()
         || thread.created_content_hash.is_none()
         || thread.last_reanchor_content_hash.is_none()
@@ -812,6 +818,7 @@ pub fn create_thread(
         }],
         linked_proposal_ids: Vec::new(),
         provider_sessions: std::collections::HashMap::new(),
+        extra: Default::default(),
     };
 
     save_thread(root, &thread)?;
@@ -1410,14 +1417,19 @@ pub fn load_events(root: &Path) -> Result<Vec<EventRecord>, String> {
     }
     let text = fs::read_to_string(&path).map_err(|e| format!("Unable to read events: {e}"))?;
     let mut events = Vec::new();
-    for line in text.lines() {
+    for (line_index, line) in text.lines().enumerate() {
         let trimmed = line.trim();
         if trimmed.is_empty() {
             continue;
         }
-        let evt: EventRecord = serde_json::from_str(trimmed)
-            .map_err(|e| format!("Unable to parse event line: {e}"))?;
-        events.push(evt);
+        match serde_json::from_str(trimmed) {
+            Ok(evt) => events.push(evt),
+            Err(error) => eprintln!(
+                "Warning: skipping malformed event line {} in {}: {error}",
+                line_index + 1,
+                path.display()
+            ),
+        }
     }
     Ok(events)
 }
@@ -1835,6 +1847,7 @@ mod tests {
             resolve_thread_ids,
             stderr: None,
             error_message: None,
+            extra: Default::default(),
         }
     }
 
@@ -2036,6 +2049,33 @@ mod tests {
     }
 
     #[test]
+    fn load_events_skips_malformed_lines() {
+        let root = unique_temp_dir("margent-cli-corrupt-events");
+        fs::create_dir_all(&root).expect("create temp root");
+        let md = ensure_workspace_layout(&root).expect("init layout");
+        let events_path = md.join("events.ndjson");
+
+        fs::write(
+            &events_path,
+            [
+                r#"{"id":"event_1","timestamp":"2026-03-20T12:00:00Z","eventType":"thread.created","threadId":"thread_1"}"#,
+                "{ not valid json",
+                r#"{"id":"event_2","timestamp":"2026-03-20T12:01:00Z","eventType":"thread.resolved","threadId":"thread_1"}"#,
+            ]
+            .join("\n"),
+        )
+        .expect("write event log");
+
+        let events = load_events(&root).expect("load events");
+
+        assert_eq!(events.len(), 2);
+        assert_eq!(events[0].id, "event_1");
+        assert_eq!(events[1].id, "event_2");
+
+        fs::remove_dir_all(&root).expect("cleanup temp root");
+    }
+
+    #[test]
     fn add_thread_message_upgrades_legacy_thread_records_on_write() {
         let root = unique_temp_dir("margent-cli-legacy-thread");
         fs::create_dir_all(&root).expect("create temp root");
@@ -2192,6 +2232,7 @@ mod tests {
             messages: Vec::new(),
             linked_proposal_ids: Vec::new(),
             provider_sessions: std::collections::HashMap::new(),
+            extra: Default::default(),
         };
         save_thread(&root, &current_thread).expect("save current thread");
 
@@ -2214,6 +2255,70 @@ mod tests {
             CURRENT_THREAD_SCHEMA_VERSION
         );
         assert_eq!(persisted_current.anchor.kind, "text_span");
+
+        fs::remove_dir_all(&root).expect("cleanup temp root");
+    }
+
+    #[test]
+    fn migrate_thread_records_does_not_downgrade_future_schema_threads() {
+        let root = unique_temp_dir("margent-cli-migrate-future");
+        fs::create_dir_all(&root).expect("create temp root");
+
+        let md = ensure_workspace_layout(&root).expect("init layout");
+        let future_thread_id = "thread_future";
+        let future_path = md.join("threads").join(format!("{future_thread_id}.json"));
+        let future_schema_version = CURRENT_THREAD_SCHEMA_VERSION + 1;
+
+        fs::write(
+            &future_path,
+            serde_json::to_string_pretty(&serde_json::json!({
+                "schemaVersion": future_schema_version,
+                "id": future_thread_id,
+                "documentId": "doc_future",
+                "status": "open",
+                "createdAt": "2026-03-20T12:00:00Z",
+                "updatedAt": "2026-03-20T12:00:00Z",
+                "createdBy": "user",
+                "title": "Future thread",
+                "tags": [],
+                "anchor": {
+                    "quote": "future",
+                    "prefixContext": "",
+                    "suffixContext": "",
+                    "startOffsetUtf16": 0,
+                    "endOffsetUtf16": 6,
+                    "startLine": 1,
+                    "startColumn": 1,
+                    "endLine": 1,
+                    "endColumn": 7,
+                    "headingPath": [],
+                    "blockFingerprint": "sha256:future",
+                    "baseContentHash": "sha256:future",
+                    "kind": "text_span",
+                    "state": "attached",
+                    "confidence": 1.0
+                },
+                "createdContentHash": "sha256:future",
+                "lastReanchorContentHash": "sha256:future",
+                "messages": [],
+                "linkedProposalIds": [],
+                "futureField": {"kept": true}
+            }))
+            .expect("serialize future thread"),
+        )
+        .expect("write future thread");
+
+        let (total, migrated) =
+            migrate_legacy_thread_records(&root).expect("migrate legacy thread records");
+
+        assert_eq!(total, 1);
+        assert_eq!(migrated, 0);
+
+        let persisted: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(&future_path).expect("read future thread"))
+                .expect("parse future thread");
+        assert_eq!(persisted["schemaVersion"], future_schema_version);
+        assert_eq!(persisted["futureField"], serde_json::json!({"kept": true}));
 
         fs::remove_dir_all(&root).expect("cleanup temp root");
     }
@@ -2270,6 +2375,7 @@ mod tests {
             resolve_thread_ids: Vec::new(),
             stderr: None,
             error_message: None,
+            extra: Default::default(),
         };
         save_proposal(&root, &proposal).expect("save proposal");
 
@@ -2473,6 +2579,7 @@ mod tests {
             resolve_thread_ids: Vec::new(),
             stderr: None,
             error_message: None,
+            extra: Default::default(),
         };
         save_proposal(&root, &proposal).expect("save proposal");
         save_document(&root, "draft.md", "Human edit first.\n").expect("change document");

@@ -55,6 +55,28 @@ pub fn read_optional_json<T: DeserializeOwned>(path: &Path) -> Result<Option<T>,
         .map_err(|error| format!("Unable to parse {}: {error}", path.display()))
 }
 
+pub fn read_scanned_json<T: DeserializeOwned>(
+    path: &Path,
+    sidecar_kind: &str,
+) -> Result<Option<T>, String> {
+    let text = match fs::read_to_string(path) {
+        Ok(text) => text,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(format!("Unable to read {}: {error}", path.display())),
+    };
+
+    match serde_json::from_str(&text) {
+        Ok(record) => Ok(Some(record)),
+        Err(error) => {
+            eprintln!(
+                "Warning: skipping corrupt {sidecar_kind} sidecar {}: {error}",
+                path.display()
+            );
+            Ok(None)
+        }
+    }
+}
+
 pub fn write_json_atomic<T: Serialize>(path: &Path, value: &T) -> Result<(), String> {
     let body = serde_json::to_string_pretty(value)
         .map_err(|error| format!("Unable to serialize {}: {error}", path.display()))?;
@@ -85,7 +107,11 @@ pub fn append_ndjson<T: Serialize>(path: &Path, value: &T) -> Result<(), String>
         .map_err(|error| format!("Unable to open {}: {error}", path.display()))?;
 
     writeln!(file, "{body}")
-        .map_err(|error| format!("Unable to append {}: {error}", path.display()))
+        .map_err(|error| format!("Unable to append {}: {error}", path.display()))?;
+    file.flush()
+        .map_err(|error| format!("Unable to flush {}: {error}", path.display()))?;
+    file.sync_data()
+        .map_err(|error| format!("Unable to sync {}: {error}", path.display()))
 }
 
 pub fn list_markdown_files(root: &Path) -> Result<Vec<PathBuf>, String> {

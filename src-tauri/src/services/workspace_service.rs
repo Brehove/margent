@@ -815,7 +815,8 @@ fn retarget_thread_records(
     now: &str,
 ) -> Result<(), String> {
     for path in json_files_in_directory(threads_dir)? {
-        let Some(mut thread) = file_service::read_optional_json::<ThreadRecord>(&path)? else {
+        let Some(mut thread) = file_service::read_scanned_json::<ThreadRecord>(&path, "thread")?
+        else {
             continue;
         };
 
@@ -838,7 +839,9 @@ fn retarget_proposal_records(
     now: &str,
 ) -> Result<(), String> {
     for path in json_files_in_directory(proposals_dir)? {
-        let Some(mut proposal) = file_service::read_optional_json::<ProposalRecord>(&path)? else {
+        let Some(mut proposal) =
+            file_service::read_scanned_json::<ProposalRecord>(&path, "proposal")?
+        else {
             continue;
         };
 
@@ -858,7 +861,7 @@ fn remove_document_sidecars(root_path: &Path, document_id: &str) -> Result<(), S
     let mdreview_path = file_service::ensure_workspace_layout(root_path)?;
 
     for path in json_files_in_directory(&mdreview_path.join("threads"))? {
-        let Some(thread) = file_service::read_optional_json::<ThreadRecord>(&path)? else {
+        let Some(thread) = file_service::read_scanned_json::<ThreadRecord>(&path, "thread")? else {
             continue;
         };
 
@@ -868,7 +871,8 @@ fn remove_document_sidecars(root_path: &Path, document_id: &str) -> Result<(), S
     }
 
     for path in json_files_in_directory(&mdreview_path.join("proposals"))? {
-        let Some(proposal) = file_service::read_optional_json::<ProposalRecord>(&path)? else {
+        let Some(proposal) = file_service::read_scanned_json::<ProposalRecord>(&path, "proposal")?
+        else {
             continue;
         };
 
@@ -1274,6 +1278,7 @@ mod tests {
             resolve_thread_ids: Vec::new(),
             stderr: None,
             error_message: None,
+            extra: Default::default(),
         }
     }
 }

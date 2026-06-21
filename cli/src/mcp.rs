@@ -538,6 +538,7 @@ impl McpServer {
             },
             stderr: None,
             error_message: None,
+            extra: Default::default(),
         };
 
         workspace::save_proposal(&self.root, &proposal)?;

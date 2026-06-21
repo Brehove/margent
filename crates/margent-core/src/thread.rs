@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 
 use serde::{Deserialize, Serialize};
+use serde_json::{Map, Value};
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -78,6 +79,8 @@ pub struct ThreadRecord {
     pub linked_proposal_ids: Vec<String>,
     #[serde(default)]
     pub provider_sessions: HashMap<String, String>,
+    #[serde(default, flatten, skip_serializing_if = "Map::is_empty")]
+    pub extra: Map<String, Value>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -105,6 +108,8 @@ pub struct ThreadSummaryRecord {
     pub linked_proposal_ids: Vec<String>,
     #[serde(default)]
     pub provider_sessions: HashMap<String, String>,
+    #[serde(default, flatten, skip_serializing_if = "Map::is_empty")]
+    pub extra: Map<String, Value>,
 }
 
 fn default_anchor_state() -> String {
@@ -124,3 +129,88 @@ fn default_thread_schema_version() -> u8 {
 }
 
 pub const CURRENT_THREAD_SCHEMA_VERSION: u8 = 6;
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use super::*;
+
+    fn thread_json(schema_version: u8) -> serde_json::Value {
+        json!({
+            "schemaVersion": schema_version,
+            "id": "thread_future",
+            "documentId": "doc_future",
+            "status": "open",
+            "createdAt": "2026-06-20T00:00:00Z",
+            "updatedAt": "2026-06-20T00:00:00Z",
+            "createdBy": "user",
+            "title": "Future thread",
+            "tags": [],
+            "anchor": {
+                "quote": "future",
+                "prefixContext": "",
+                "suffixContext": "",
+                "startOffsetUtf16": 0,
+                "endOffsetUtf16": 6,
+                "startLine": 1,
+                "startColumn": 1,
+                "endLine": 1,
+                "endColumn": 7,
+                "headingPath": [],
+                "blockFingerprint": "sha256:future",
+                "baseContentHash": "sha256:future",
+                "kind": "text_span",
+                "state": "attached",
+                "confidence": 1.0
+            },
+            "createdContentHash": "sha256:future",
+            "lastReanchorContentHash": "sha256:future",
+            "reviewDone": false,
+            "messages": [],
+            "linkedProposalIds": [],
+            "providerSessions": {},
+            "futureField": {"kept": true}
+        })
+    }
+
+    #[test]
+    fn thread_record_preserves_unknown_fields_on_round_trip() {
+        let record: ThreadRecord =
+            serde_json::from_value(thread_json(CURRENT_THREAD_SCHEMA_VERSION + 1))
+                .expect("parse future thread");
+
+        assert_eq!(record.schema_version, CURRENT_THREAD_SCHEMA_VERSION + 1);
+        assert_eq!(
+            record.extra.get("futureField"),
+            Some(&json!({"kept": true}))
+        );
+
+        let serialized = serde_json::to_value(&record).expect("serialize thread");
+        assert_eq!(serialized["futureField"], json!({"kept": true}));
+        assert_eq!(
+            serialized["schemaVersion"],
+            json!(CURRENT_THREAD_SCHEMA_VERSION + 1)
+        );
+    }
+
+    #[test]
+    fn thread_summary_record_preserves_unknown_fields_on_round_trip() {
+        let record: ThreadSummaryRecord =
+            serde_json::from_value(thread_json(CURRENT_THREAD_SCHEMA_VERSION + 1))
+                .expect("parse future thread summary");
+
+        assert_eq!(record.schema_version, CURRENT_THREAD_SCHEMA_VERSION + 1);
+        assert_eq!(
+            record.extra.get("futureField"),
+            Some(&json!({"kept": true}))
+        );
+
+        let serialized = serde_json::to_value(&record).expect("serialize thread summary");
+        assert_eq!(serialized["futureField"], json!({"kept": true}));
+        assert_eq!(
+            serialized["schemaVersion"],
+            json!(CURRENT_THREAD_SCHEMA_VERSION + 1)
+        );
+    }
+}

@@ -1,6 +1,6 @@
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::time::{Instant, SystemTime, UNIX_EPOCH};
+use std::time::Instant;
 
 use serde::{de::DeserializeOwned, Deserialize};
 use serde_json::{json, Value};
@@ -713,6 +713,7 @@ fn build_success_proposal(
                 resolve_thread_ids,
                 stderr,
                 error_message: None,
+                extra: Default::default(),
             })
         }
         "unified_diff" => {
@@ -740,6 +741,7 @@ fn build_success_proposal(
                 resolve_thread_ids,
                 stderr,
                 error_message: None,
+                extra: Default::default(),
             })
         }
         unsupported => Ok(build_failed_proposal(
@@ -790,6 +792,7 @@ fn build_failed_proposal(
         resolve_thread_ids: Vec::new(),
         stderr,
         error_message: Some(error_message.to_string()),
+        extra: Default::default(),
     }
 }
 
@@ -1151,11 +1154,7 @@ fn some_stderr(stderr: String) -> Option<String> {
 }
 
 fn next_id(prefix: &str) -> Result<String, String> {
-    let nonce = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map_err(|error| format!("Unable to compute system time: {error}"))?
-        .as_micros();
-    Ok(format!("{prefix}_{nonce}"))
+    Ok(margent_core::id::new_id(prefix))
 }
 
 #[cfg(test)]
@@ -1164,7 +1163,7 @@ mod tests {
     use std::os::unix::fs::PermissionsExt;
     use std::path::PathBuf;
     use std::thread::sleep;
-    use std::time::Duration;
+    use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
     use crate::models::thread::AnchorRecord;
 
@@ -2033,6 +2032,7 @@ printf '%s' '{"status":"ok","responseMode":"updated_document","assistantMessage"
             resolve_thread_ids,
             stderr: None,
             error_message: None,
+            extra: Default::default(),
         }
     }
 }

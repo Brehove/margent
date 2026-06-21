@@ -1,6 +1,6 @@
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::time::{Instant, SystemTime, UNIX_EPOCH};
+use std::time::{Instant, UNIX_EPOCH};
 
 use serde::de::DeserializeOwned;
 use serde_json::json;
@@ -152,6 +152,7 @@ pub fn create_thread(
         }],
         linked_proposal_ids: Vec::new(),
         provider_sessions: std::collections::HashMap::new(),
+        extra: Default::default(),
     };
 
     save_thread_record(root_path, &thread)?;
@@ -214,7 +215,9 @@ pub fn reattach_document_threads(
             || thread.last_reanchor_content_hash.is_none()
             || thread.created_content_hash.is_none();
         if thread.anchor != original_anchor || reanchor_hash_changed || was_legacy {
-            thread.schema_version = CURRENT_THREAD_SCHEMA_VERSION;
+            if thread.schema_version < CURRENT_THREAD_SCHEMA_VERSION {
+                thread.schema_version = CURRENT_THREAD_SCHEMA_VERSION;
+            }
             if thread.created_content_hash.is_none() {
                 thread.created_content_hash = Some(original_anchor.base_content_hash.clone());
             }
@@ -452,7 +455,9 @@ where
 }
 
 fn normalize_thread_record(mut normalized: ThreadRecord) -> ThreadRecord {
-    normalized.schema_version = CURRENT_THREAD_SCHEMA_VERSION;
+    if normalized.schema_version < CURRENT_THREAD_SCHEMA_VERSION {
+        normalized.schema_version = CURRENT_THREAD_SCHEMA_VERSION;
+    }
     if normalized.anchor.kind.trim().is_empty() {
         normalized.anchor.kind = "text_span".into();
     }
@@ -530,17 +535,14 @@ pub fn append_event(
 }
 
 pub fn next_id(prefix: &str) -> Result<String, String> {
-    let nonce = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map_err(|error| format!("Unable to compute system time: {error}"))?
-        .as_micros();
-    Ok(format!("{prefix}_{nonce}"))
+    Ok(margent_core::id::new_id(prefix))
 }
 
 #[cfg(test)]
 mod tests {
     use std::fs;
     use std::path::PathBuf;
+    use std::time::{SystemTime, UNIX_EPOCH};
 
     use super::*;
     use crate::services::{file_service, workspace_service};
