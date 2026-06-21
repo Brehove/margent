@@ -908,9 +908,8 @@ fn collect_blocks(content: &str, heading_index: &[HeadingIndexEntry]) -> Vec<Doc
     let mut current: Option<WorkingBlock> = None;
     let mut byte_cursor = 0usize;
     let mut utf16_cursor = 0usize;
-    let mut line_number = 1usize;
 
-    for raw_line in content.split_inclusive('\n') {
+    for (line_number, raw_line) in (1usize..).zip(content.split_inclusive('\n')) {
         let line_body = raw_line
             .strip_suffix('\n')
             .unwrap_or(raw_line)
@@ -937,7 +936,6 @@ fn collect_blocks(content: &str, heading_index: &[HeadingIndexEntry]) -> Vec<Doc
 
         byte_cursor += raw_line.len();
         utf16_cursor += raw_line.encode_utf16().count();
-        line_number += 1;
     }
 
     if let Some(block) = current.take() {
