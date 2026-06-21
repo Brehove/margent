@@ -2,7 +2,9 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::thread;
-use std::time::{Instant, UNIX_EPOCH};
+#[cfg(debug_assertions)]
+use std::time::Instant;
+use std::time::UNIX_EPOCH;
 
 use crate::models::document::{
     DocumentPayload, DocumentRecord, DocumentVersion, IntoDocumentPayload,
@@ -15,12 +17,17 @@ use crate::models::workspace::{AssetImportResult, WorkspaceRecord, WorkspaceSnap
 
 use super::{file_service, thread_service};
 
+#[cfg(debug_assertions)]
 struct DebugTiming {
     label: &'static str,
     start: Instant,
 }
 
+#[cfg(not(debug_assertions))]
+struct DebugTiming;
+
 impl DebugTiming {
+    #[cfg(debug_assertions)]
     fn new(label: &'static str) -> Self {
         Self {
             label,
@@ -28,8 +35,13 @@ impl DebugTiming {
         }
     }
 
+    #[cfg(not(debug_assertions))]
+    fn new(_label: &'static str) -> Self {
+        Self
+    }
+
+    #[cfg(debug_assertions)]
     fn mark(&self, step: &str) {
-        #[cfg(debug_assertions)]
         eprintln!(
             "[margent timing] {}: {} at {:.1}ms",
             self.label,
@@ -37,6 +49,9 @@ impl DebugTiming {
             self.start.elapsed().as_secs_f64() * 1000.0
         );
     }
+
+    #[cfg(not(debug_assertions))]
+    fn mark(&self, _step: &str) {}
 }
 
 pub fn open_workspace(path: &str) -> Result<WorkspaceSnapshot, String> {
@@ -376,9 +391,11 @@ fn schedule_document_thread_reattach(
     content: String,
 ) {
     let document_id = document_record.id.clone();
+    #[cfg(debug_assertions)]
     let spawned_document_id = document_id.clone();
     let thread_name = format!("margent-reattach-{document_id}");
     if let Err(error) = thread::Builder::new().name(thread_name).spawn(move || {
+        #[cfg(debug_assertions)]
         let start = Instant::now();
         let result = reattach_document_threads_if_current(&root_path, &document_record, &content);
         #[cfg(debug_assertions)]
@@ -393,12 +410,16 @@ fn schedule_document_thread_reattach(
                 spawned_document_id, error
             ),
         }
+        #[cfg(not(debug_assertions))]
+        let _ = result;
     }) {
         #[cfg(debug_assertions)]
         eprintln!(
             "[margent timing] deferred reattach_document_threads spawn failed: document={}, error={}",
             document_id, error
         );
+        #[cfg(not(debug_assertions))]
+        let _ = error;
     }
 }
 

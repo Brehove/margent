@@ -33,12 +33,17 @@ struct AdapterResponse {
     warnings: Option<Vec<String>>,
 }
 
+#[cfg(debug_assertions)]
 struct DebugTiming {
     label: &'static str,
     start: Instant,
 }
 
+#[cfg(not(debug_assertions))]
+struct DebugTiming;
+
 impl DebugTiming {
+    #[cfg(debug_assertions)]
     fn new(label: &'static str) -> Self {
         Self {
             label,
@@ -46,8 +51,13 @@ impl DebugTiming {
         }
     }
 
+    #[cfg(not(debug_assertions))]
+    fn new(_label: &'static str) -> Self {
+        Self
+    }
+
+    #[cfg(debug_assertions)]
     fn mark(&self, step: &str) {
-        #[cfg(debug_assertions)]
         eprintln!(
             "[margent timing] {}: {} at {:.1}ms",
             self.label,
@@ -55,6 +65,9 @@ impl DebugTiming {
             self.start.elapsed().as_secs_f64() * 1000.0
         );
     }
+
+    #[cfg(not(debug_assertions))]
+    fn mark(&self, _step: &str) {}
 }
 
 pub fn load_proposals(
@@ -1041,6 +1054,8 @@ fn refresh_pending_proposals_for_document(
         stale_count,
         start.elapsed().as_secs_f64() * 1000.0
     );
+    #[cfg(not(debug_assertions))]
+    let _ = (start, scanned_count, document_proposal_count, stale_count);
 
     Ok(())
 }

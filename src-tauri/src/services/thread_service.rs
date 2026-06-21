@@ -232,6 +232,8 @@ pub fn reattach_document_threads(
         changed_count,
         start.elapsed().as_secs_f64() * 1000.0
     );
+    #[cfg(not(debug_assertions))]
+    let _ = (start, scanned_count, document_thread_count, changed_count);
 
     Ok(())
 }
