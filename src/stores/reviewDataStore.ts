@@ -10,8 +10,6 @@ interface ReviewDataStore {
   threads: ThreadRecord[];
   removeThread: (threadId: string) => void;
   reset: () => void;
-  setDocumentThreads: (documentId: string, threads: ThreadRecord[]) => void;
-  setDocumentProposals: (documentId: string, proposals: ProposalRecord[]) => void;
   setErrorMessage: (message: string | null) => void;
   setIsLoading: (value: boolean) => void;
   setReviewData: (data: { proposals: ProposalRecord[]; threads: ThreadRecord[] }) => void;
@@ -35,22 +33,6 @@ export const useReviewDataStore = create<ReviewDataStore>((set) => ({
       threads: state.threads.filter((thread) => thread.id !== threadId),
     })),
   reset: () => set(initialState),
-  setDocumentThreads: (documentId, threads) =>
-    set((state) => ({
-      revision: state.revision + 1,
-      threads: sortThreads([
-        ...threads,
-        ...state.threads.filter((thread) => thread.documentId !== documentId),
-      ]),
-    })),
-  setDocumentProposals: (documentId, proposals) =>
-    set((state) => ({
-      proposals: sortProposals([
-        ...proposals,
-        ...state.proposals.filter((proposal) => proposal.documentId !== documentId),
-      ]),
-      revision: state.revision + 1,
-    })),
   setErrorMessage: (errorMessage) => set({ errorMessage }),
   setIsLoading: (isLoading) => set({ isLoading }),
   setReviewData: ({ proposals, threads }) =>

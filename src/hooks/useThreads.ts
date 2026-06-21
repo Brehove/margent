@@ -37,7 +37,6 @@ export function useThreads({
   const upsertThreadInStore = useThreadStore((state) => state.upsertThread);
   const reviewThreads = useReviewDataStore((state) => state.threads);
   const reviewIsLoading = useReviewDataStore((state) => state.isLoading);
-  const setDocumentThreads = useReviewDataStore((state) => state.setDocumentThreads);
   const upsertReviewThread = useReviewDataStore((state) => state.upsertThread);
   const removeReviewThread = useReviewDataStore((state) => state.removeThread);
 
@@ -104,20 +103,6 @@ export function useThreads({
     }
   }, [activeDocument?.relativePath, enabled, selectThreadInStore, workspace?.rootPath]);
 
-  async function fetchThreads(
-    workspaceRoot = workspace?.rootPath,
-    documentId = activeDocument?.id,
-  ) {
-    if (!workspaceRoot || !documentId) {
-      return [];
-    }
-
-    return invokeBackend<ThreadRecord[]>("load_threads", {
-      documentId,
-      workspaceRoot,
-    });
-  }
-
   async function fetchThread(
     workspaceRoot = workspace?.rootPath,
     threadId?: string | null,
@@ -130,25 +115,6 @@ export function useThreads({
       threadId,
       workspaceRoot,
     });
-  }
-
-  async function loadThreads(workspaceRoot = workspace?.rootPath, documentId = activeDocument?.id) {
-    if (!workspaceRoot || !documentId) {
-      return;
-    }
-
-    setThreadIsLoading(true);
-    setThreadErrorMessage(null);
-
-    try {
-      const threads = await fetchThreads(workspaceRoot, documentId);
-      setDocumentThreads(documentId, threads);
-      setThreadsInStore(threads);
-    } catch (error) {
-      setThreadErrorMessage(getErrorMessage(error, "Unable to load threads for this document."));
-    } finally {
-      setThreadIsLoading(false);
-    }
   }
 
   async function createThread(selection: AnchorRecord, body: string) {
@@ -358,11 +324,6 @@ export function useThreads({
     (threadId: string | null) => loadThread(threadId),
     [workspace?.rootPath],
   );
-  const stableLoadThreads = useCallback(
-    (workspaceRoot = workspace?.rootPath, documentId = activeDocument?.id) =>
-      loadThreads(workspaceRoot, documentId),
-    [activeDocument?.id, workspace?.rootPath],
-  );
   const stableReopenThread = useCallback(
     (threadId: string) => reopenThread(threadId),
     [workspace?.rootPath],
@@ -392,7 +353,6 @@ export function useThreads({
       createThreadFromSelection: stableCreateThreadFromSelection,
       deleteThread: stableDeleteThread,
       loadThread: stableLoadThread,
-      loadThreads: stableLoadThreads,
       reopenThread: stableReopenThread,
       resolveThread: stableResolveThread,
       selectThread: stableSelectThread,
@@ -403,7 +363,6 @@ export function useThreads({
       stableCreateThreadFromSelection,
       stableDeleteThread,
       stableLoadThread,
-      stableLoadThreads,
       stableReopenThread,
       stableResolveThread,
       stableSelectThread,
