@@ -1,20 +1,15 @@
-import { useCallback, useEffect, useMemo, useRef } from "react";
+import { useCallback, useEffect, useMemo } from "react";
 import { createAnchor, defaultThreadTitle } from "../lib/anchor";
-import { invokeBackend, watchBackend } from "../lib/backend";
+import { invokeBackend } from "../lib/backend";
 import { getErrorMessage } from "../lib/errorMessage";
 import {
   clearReviewNotificationBadge,
-  collectReviewNotificationItems,
-  notifyReviewUpdates,
   setReviewNotificationOpenHandler,
 } from "../lib/reviewNotifications";
-import { getScopedWatchTarget } from "../lib/watchTarget";
+import { threadsForDocument, useReviewDataStore } from "../stores/reviewDataStore";
 import { useThreadStore } from "../stores/threadStore";
 import type { AnchorRecord, EditorSelectionSnapshot, ThreadRecord } from "../types/thread";
 import type { DocumentPayload, WorkspaceSnapshot } from "../types/workspace";
-
-const EMPTY_THREAD_SIGNATURE = "";
-const SETTLED_THREAD_REFRESH_DELAY_MS = 350;
 
 interface UseThreadsOptions {
   activeDocument: DocumentPayload | null;
@@ -28,7 +23,11 @@ export function useThreads({
   workspace,
 }: UseThreadsOptions) {
   const store = useThreadStore();
-  const threadsSignatureRef = useRef(EMPTY_THREAD_SIGNATURE);
+  const reviewThreads = useReviewDataStore((state) => state.threads);
+  const reviewIsLoading = useReviewDataStore((state) => state.isLoading);
+  const setDocumentThreads = useReviewDataStore((state) => state.setDocumentThreads);
+  const upsertReviewThread = useReviewDataStore((state) => state.upsertThread);
+  const removeReviewThread = useReviewDataStore((state) => state.removeThread);
 
   useEffect(() => {
     if (!enabled) {
@@ -36,14 +35,12 @@ export function useThreads({
     }
 
     if (!workspace || !activeDocument) {
-      threadsSignatureRef.current = EMPTY_THREAD_SIGNATURE;
-      store.reset();
+      useThreadStore.getState().reset();
       return;
     }
 
-    void loadThreads(workspace.rootPath, activeDocument.id);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeDocument?.currentContentHash, activeDocument?.id, enabled, workspace?.rootPath]);
+    useThreadStore.getState().setThreads(threadsForDocument(reviewThreads, activeDocument.id));
+  }, [activeDocument?.id, enabled, reviewThreads, workspace?.rootPath]);
 
   useEffect(() => {
     if (!enabled) {
@@ -54,86 +51,10 @@ export function useThreads({
       return;
     }
 
-    const threadsDirectoryPath = `${workspace.mdreviewPath}/threads`;
     const workspaceRoot = workspace.rootPath;
-    const documentId = activeDocument.id;
     const documentRelativePath = activeDocument.relativePath;
-    let cancelled = false;
-    let isRefreshing = false;
-    let shouldRefreshAgain = false;
-    let settledRefreshTimeoutId: number | null = null;
-    let hasCompletedInitialRefresh = false;
-
-    async function refreshThreadsIfChanged() {
-      if (cancelled) {
-        return;
-      }
-
-      if (isRefreshing) {
-        shouldRefreshAgain = true;
-        return;
-      }
-
-      isRefreshing = true;
-
-      try {
-        const nextSignature = await fetchThreadUpdateSignature(workspaceRoot, documentId);
-
-        if (cancelled) {
-          return;
-        }
-
-        if (nextSignature === threadsSignatureRef.current) {
-          return;
-        }
-
-        const previousThreads = useThreadStore.getState().threads;
-        const threads = await fetchThreads(workspaceRoot, documentId);
-
-        if (cancelled) {
-          return;
-        }
-
-        threadsSignatureRef.current = nextSignature;
-        store.setThreads(threads);
-        if (hasCompletedInitialRefresh) {
-          void notifyReviewUpdates(
-            collectReviewNotificationItems({
-              documentRelativePath,
-              nextThreads: threads,
-              previousThreads,
-              workspaceRoot,
-            }),
-          );
-        }
-      } catch (error) {
-        if (!cancelled) {
-          store.setErrorMessage(getErrorMessage(error, "Unable to refresh threads for this document."));
-        }
-      } finally {
-        isRefreshing = false;
-
-        if (!cancelled && shouldRefreshAgain) {
-          shouldRefreshAgain = false;
-          void refreshThreadsIfChanged();
-        }
-
-        hasCompletedInitialRefresh = true;
-      }
-    }
-
-    let stopWatching: (() => void) | null = null;
-    const watchTarget = getScopedWatchTarget(threadsDirectoryPath, {
-      delayMs: 200,
-      recursive: true,
-    });
     const refreshOnAppReturn = () => {
-      if (cancelled || useThreadStore.getState().isSaving) {
-        return;
-      }
-
       void clearReviewNotificationBadge();
-      void refreshThreadsIfChanged();
     };
     const stopNotificationOpenHandling = setReviewNotificationOpenHandler((target) => {
       if (
@@ -143,59 +64,15 @@ export function useThreads({
         return;
       }
 
-      store.selectThread(target.threadId);
+      useThreadStore.getState().selectThread(target.threadId);
     });
-
-    void refreshThreadsIfChanged();
-    void watchBackend(
-      watchTarget.path,
-      () => {
-        if (cancelled || useThreadStore.getState().isSaving) {
-          return;
-        }
-
-        void refreshThreadsIfChanged();
-        if (settledRefreshTimeoutId !== null) {
-          window.clearTimeout(settledRefreshTimeoutId);
-        }
-        // CLI writes use atomic rename semantics; a second settled refresh avoids
-        // missing updates when the first watcher event arrives before the final file lands.
-        settledRefreshTimeoutId = window.setTimeout(() => {
-          settledRefreshTimeoutId = null;
-          if (cancelled || useThreadStore.getState().isSaving) {
-            return;
-          }
-
-          void refreshThreadsIfChanged();
-        }, SETTLED_THREAD_REFRESH_DELAY_MS);
-      },
-      watchTarget.options,
-    )
-      .then((unwatch) => {
-        if (cancelled) {
-          void unwatch();
-          return;
-        }
-
-        stopWatching = unwatch;
-      })
-      .catch((error) => {
-        if (!cancelled) {
-          store.setErrorMessage(getErrorMessage(error, "Unable to watch thread changes."));
-        }
-      });
 
     window.addEventListener("focus", refreshOnAppReturn);
     document.addEventListener("visibilitychange", refreshOnVisibilityChange);
 
     return () => {
-      cancelled = true;
-      if (settledRefreshTimeoutId !== null) {
-        window.clearTimeout(settledRefreshTimeoutId);
-      }
       window.removeEventListener("focus", refreshOnAppReturn);
       document.removeEventListener("visibilitychange", refreshOnVisibilityChange);
-      stopWatching?.();
       stopNotificationOpenHandling();
     };
 
@@ -206,7 +83,7 @@ export function useThreads({
 
       refreshOnAppReturn();
     }
-  }, [activeDocument?.id, enabled, workspace?.mdreviewPath, workspace?.rootPath]);
+  }, [activeDocument?.relativePath, enabled, workspace?.rootPath]);
 
   async function fetchThreads(
     workspaceRoot = workspace?.rootPath,
@@ -236,20 +113,6 @@ export function useThreads({
     });
   }
 
-  async function fetchThreadUpdateSignature(
-    workspaceRoot = workspace?.rootPath,
-    documentId = activeDocument?.id,
-  ) {
-    if (!workspaceRoot || !documentId) {
-      return EMPTY_THREAD_SIGNATURE;
-    }
-
-    return invokeBackend<string>("check_thread_update_signature", {
-      documentId,
-      workspaceRoot,
-    });
-  }
-
   async function loadThreads(workspaceRoot = workspace?.rootPath, documentId = activeDocument?.id) {
     if (!workspaceRoot || !documentId) {
       return;
@@ -260,7 +123,7 @@ export function useThreads({
 
     try {
       const threads = await fetchThreads(workspaceRoot, documentId);
-      threadsSignatureRef.current = await fetchThreadUpdateSignature(workspaceRoot, documentId);
+      setDocumentThreads(documentId, threads);
       store.setThreads(threads);
     } catch (error) {
       store.setErrorMessage(getErrorMessage(error, "Unable to load threads for this document."));
@@ -285,10 +148,7 @@ export function useThreads({
         title: defaultThreadTitle(selection.quote),
         workspaceRoot: workspace.rootPath,
       });
-      threadsSignatureRef.current = await fetchThreadUpdateSignature(
-        workspace.rootPath,
-        activeDocument.id,
-      );
+      upsertReviewThread(thread);
       store.upsertThread(thread);
     } catch (error) {
       store.setErrorMessage(getErrorMessage(error, "Unable to create a new thread."));
@@ -345,10 +205,7 @@ export function useThreads({
         title: documentThreadTitle(body),
         workspaceRoot: workspace.rootPath,
       });
-      threadsSignatureRef.current = await fetchThreadUpdateSignature(
-        workspace.rootPath,
-        activeDocument.id,
-      );
+      upsertReviewThread(thread);
       store.upsertThread(thread);
       store.selectThread(thread.id);
     } catch (error) {
@@ -373,10 +230,7 @@ export function useThreads({
         threadId,
         workspaceRoot: workspace.rootPath,
       });
-      threadsSignatureRef.current = await fetchThreadUpdateSignature(
-        workspace.rootPath,
-        thread.documentId,
-      );
+      upsertReviewThread(thread);
       store.upsertThread(thread);
     } catch (error) {
       store.setErrorMessage(getErrorMessage(error, "Unable to add a reply to this thread."));
@@ -398,10 +252,7 @@ export function useThreads({
         threadId,
         workspaceRoot: workspace.rootPath,
       });
-      threadsSignatureRef.current = await fetchThreadUpdateSignature(
-        workspace.rootPath,
-        thread.documentId,
-      );
+      upsertReviewThread(thread);
       store.upsertThread(thread);
     } catch (error) {
       store.setErrorMessage(getErrorMessage(error, "Unable to resolve this thread."));
@@ -423,10 +274,7 @@ export function useThreads({
         threadId,
         workspaceRoot: workspace.rootPath,
       });
-      threadsSignatureRef.current = await fetchThreadUpdateSignature(
-        workspace.rootPath,
-        activeDocument?.id,
-      );
+      removeReviewThread(threadId);
       store.removeThread(threadId);
     } catch (error) {
       store.setErrorMessage(getErrorMessage(error, "Unable to delete this thread."));
@@ -448,10 +296,7 @@ export function useThreads({
         threadId,
         workspaceRoot: workspace.rootPath,
       });
-      threadsSignatureRef.current = await fetchThreadUpdateSignature(
-        workspace.rootPath,
-        thread.documentId,
-      );
+      upsertReviewThread(thread);
       store.upsertThread(thread);
     } catch (error) {
       store.setErrorMessage(getErrorMessage(error, "Unable to reopen this thread."));
@@ -463,6 +308,7 @@ export function useThreads({
   async function loadThread(threadId: string | null) {
     const thread = await fetchThread(workspace?.rootPath, threadId);
     if (thread) {
+      upsertReviewThread(thread);
       store.upsertThread(thread);
     }
     return thread;
@@ -511,6 +357,7 @@ export function useThreads({
   return useMemo(
     () => ({
       ...store,
+      isLoading: store.isLoading || reviewIsLoading,
       addReply: stableAddReply,
       createDocumentThread: stableCreateDocumentThread,
       createThreadFromSelection: stableCreateThreadFromSelection,
@@ -532,6 +379,7 @@ export function useThreads({
       stableResolveThread,
       stableSelectThread,
       store,
+      reviewIsLoading,
     ],
   );
 }
