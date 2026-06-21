@@ -176,6 +176,9 @@ pub fn reattach_document_threads(
     let start = Instant::now();
     let mdreview_path = file_service::ensure_workspace_layout(workspace_root)?;
     let threads_dir = mdreview_path.join("threads");
+    let reattachment_context =
+        anchor_service::ReattachmentContext::new(content, &document_record.heading_index);
+    let current_content_hash = reattachment_context.content_hash().to_string();
     let mut scanned_count = 0usize;
     let mut document_thread_count = 0usize;
     let mut changed_count = 0usize;
@@ -202,15 +205,11 @@ pub fn reattach_document_threads(
 
         let original_anchor = thread.anchor.clone();
         if thread.anchor.kind != "document" {
-            anchor_service::reattach_anchor(
-                &mut thread.anchor,
-                content,
-                &document_record.heading_index,
-            );
+            reattachment_context.reattach_anchor(&mut thread.anchor);
         }
 
-        let reanchor_hash_changed = thread.last_reanchor_content_hash.as_deref()
-            != Some(document_record.current_content_hash.as_str());
+        let reanchor_hash_changed =
+            thread.last_reanchor_content_hash.as_deref() != Some(current_content_hash.as_str());
         let was_legacy = thread.schema_version < CURRENT_THREAD_SCHEMA_VERSION
             || thread.last_reanchor_content_hash.is_none()
             || thread.created_content_hash.is_none();
@@ -221,7 +220,7 @@ pub fn reattach_document_threads(
             if thread.created_content_hash.is_none() {
                 thread.created_content_hash = Some(original_anchor.base_content_hash.clone());
             }
-            thread.last_reanchor_content_hash = Some(document_record.current_content_hash.clone());
+            thread.last_reanchor_content_hash = Some(current_content_hash.clone());
             save_thread_record(workspace_root, &thread)?;
             changed_count += 1;
         }
