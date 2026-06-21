@@ -1,4 +1,5 @@
 import { create } from "zustand";
+import { createJSONStorage, persist, type StateStorage } from "zustand/middleware";
 
 export type EditorMode = "raw" | "rendered";
 export type PreferredAgentProvider = "codex" | "claude";
@@ -55,6 +56,44 @@ const defaultState: PersistedUiState = {
   themeMode: "system",
 };
 
+const legacyCompatibleUiStorage: StateStorage = {
+  getItem(name) {
+    if (typeof window === "undefined") {
+      return null;
+    }
+
+    const raw = window.localStorage.getItem(name);
+    if (!raw) {
+      return null;
+    }
+
+    try {
+      const parsed = JSON.parse(raw) as unknown;
+      if (isObject(parsed) && "state" in parsed) {
+        return raw;
+      }
+
+      return JSON.stringify({ state: parsed, version: 0 });
+    } catch {
+      return null;
+    }
+  },
+  removeItem(name) {
+    if (typeof window !== "undefined") {
+      window.localStorage.removeItem(name);
+    }
+  },
+  setItem(name, value) {
+    if (typeof window !== "undefined") {
+      window.localStorage.setItem(name, value);
+    }
+  },
+};
+
+function isObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}
+
 function normalizeThemeMode(themeMode: unknown): ThemeMode {
   if (themeMode === "light" || themeMode === "dark") {
     return themeMode;
@@ -62,213 +101,87 @@ function normalizeThemeMode(themeMode: unknown): ThemeMode {
   return "system";
 }
 
+function normalizeEditorMode(editorMode: unknown): EditorMode {
+  return editorMode === "raw" ? "raw" : "rendered";
+}
+
+function normalizePreferredAgentProvider(provider: unknown): PreferredAgentProvider {
+  return provider === "claude" ? "claude" : "codex";
+}
+
+function normalizePreferredReviewPassName(passName: unknown) {
+  return typeof passName === "string" && passName.trim() ? passName.trim() : null;
+}
+
 function clampCommentDockWidth(width: number) {
   return Math.max(COMMENT_DOCK_MIN_WIDTH, Math.min(width, COMMENT_DOCK_MAX_WIDTH));
 }
 
-function readPersistedState(): PersistedUiState {
-  if (typeof window === "undefined") {
-    return defaultState;
-  }
+function normalizePersistedUiState(value: unknown): PersistedUiState {
+  const persisted = isObject(value) ? value : {};
+  const width = persisted.commentDockWidth;
 
-  try {
-    const raw = window.localStorage.getItem(STORAGE_KEY);
-    if (!raw) {
-      return defaultState;
-    }
-
-    const parsed = JSON.parse(raw) as Partial<PersistedUiState>;
-    return {
-      commentDockWidth:
-        typeof parsed.commentDockWidth === "number"
-          ? clampCommentDockWidth(parsed.commentDockWidth)
-          : COMMENT_DOCK_DEFAULT_WIDTH,
-      editorMode: parsed.editorMode === "raw" ? "raw" : "rendered",
-      isDocumentOutlineVisible: Boolean(parsed.isDocumentOutlineVisible),
-      isFocusModeEnabled: Boolean(parsed.isFocusModeEnabled),
-      isWorkspacePaneCollapsed: Boolean(parsed.isWorkspacePaneCollapsed),
-      preferredAgentProvider:
-        parsed.preferredAgentProvider === "claude" ? "claude" : "codex",
-      preferredReviewPassName:
-        typeof parsed.preferredReviewPassName === "string" &&
-        parsed.preferredReviewPassName.trim()
-          ? parsed.preferredReviewPassName.trim()
-          : null,
-      themeMode: normalizeThemeMode(parsed.themeMode),
-    };
-  } catch {
-    return defaultState;
-  }
+  return {
+    commentDockWidth:
+      typeof width === "number" ? clampCommentDockWidth(width) : COMMENT_DOCK_DEFAULT_WIDTH,
+    editorMode: normalizeEditorMode(persisted.editorMode),
+    isDocumentOutlineVisible: Boolean(persisted.isDocumentOutlineVisible),
+    isFocusModeEnabled: Boolean(persisted.isFocusModeEnabled),
+    isWorkspacePaneCollapsed: Boolean(persisted.isWorkspacePaneCollapsed),
+    preferredAgentProvider: normalizePreferredAgentProvider(persisted.preferredAgentProvider),
+    preferredReviewPassName: normalizePreferredReviewPassName(persisted.preferredReviewPassName),
+    themeMode: normalizeThemeMode(persisted.themeMode),
+  };
 }
 
-function writePersistedState(state: PersistedUiState) {
-  if (typeof window === "undefined") {
-    return;
-  }
-
-  window.localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+function persistedStateFromStore(state: UiStore): PersistedUiState {
+  return {
+    commentDockWidth: state.commentDockWidth,
+    editorMode: state.editorMode,
+    isDocumentOutlineVisible: state.isDocumentOutlineVisible,
+    isFocusModeEnabled: state.isFocusModeEnabled,
+    isWorkspacePaneCollapsed: state.isWorkspacePaneCollapsed,
+    preferredAgentProvider: state.preferredAgentProvider,
+    preferredReviewPassName: state.preferredReviewPassName,
+    themeMode: state.themeMode,
+  };
 }
 
-function clearPersistedState() {
-  if (typeof window === "undefined") {
-    return;
-  }
-
-  window.localStorage.removeItem(STORAGE_KEY);
-}
-
-export const useUiStore = create<UiStore>((set, get) => ({
-  ...readPersistedState(),
-  reset: () => {
-    set(defaultState);
-    clearPersistedState();
-  },
-  setCommentDockWidth: (commentDockWidth) => {
-    const nextWidth = clampCommentDockWidth(commentDockWidth);
-    set({ commentDockWidth: nextWidth });
-    writePersistedState({
-      commentDockWidth: nextWidth,
-      editorMode: get().editorMode,
-      isDocumentOutlineVisible: get().isDocumentOutlineVisible,
-      isFocusModeEnabled: get().isFocusModeEnabled,
-      isWorkspacePaneCollapsed: get().isWorkspacePaneCollapsed,
-      preferredAgentProvider: get().preferredAgentProvider,
-      preferredReviewPassName: get().preferredReviewPassName,
-      themeMode: get().themeMode,
-    });
-  },
-  setDocumentOutlineVisible: (isDocumentOutlineVisible) => {
-    set({ isDocumentOutlineVisible });
-    writePersistedState({
-      commentDockWidth: get().commentDockWidth,
-      editorMode: get().editorMode,
-      isDocumentOutlineVisible,
-      isFocusModeEnabled: get().isFocusModeEnabled,
-      isWorkspacePaneCollapsed: get().isWorkspacePaneCollapsed,
-      preferredAgentProvider: get().preferredAgentProvider,
-      preferredReviewPassName: get().preferredReviewPassName,
-      themeMode: get().themeMode,
-    });
-  },
-  setEditorMode: (editorMode) => {
-    set({ editorMode });
-    writePersistedState({
-      commentDockWidth: get().commentDockWidth,
-      editorMode,
-      isDocumentOutlineVisible: get().isDocumentOutlineVisible,
-      isFocusModeEnabled: get().isFocusModeEnabled,
-      isWorkspacePaneCollapsed: get().isWorkspacePaneCollapsed,
-      preferredAgentProvider: get().preferredAgentProvider,
-      preferredReviewPassName: get().preferredReviewPassName,
-      themeMode: get().themeMode,
-    });
-  },
-  setFocusModeEnabled: (isFocusModeEnabled) => {
-    set({ isFocusModeEnabled });
-    writePersistedState({
-      commentDockWidth: get().commentDockWidth,
-      editorMode: get().editorMode,
-      isDocumentOutlineVisible: get().isDocumentOutlineVisible,
-      isFocusModeEnabled,
-      isWorkspacePaneCollapsed: get().isWorkspacePaneCollapsed,
-      preferredAgentProvider: get().preferredAgentProvider,
-      preferredReviewPassName: get().preferredReviewPassName,
-      themeMode: get().themeMode,
-    });
-  },
-  setPreferredAgentProvider: (preferredAgentProvider) => {
-    set({ preferredAgentProvider });
-    writePersistedState({
-      commentDockWidth: get().commentDockWidth,
-      editorMode: get().editorMode,
-      isDocumentOutlineVisible: get().isDocumentOutlineVisible,
-      isFocusModeEnabled: get().isFocusModeEnabled,
-      isWorkspacePaneCollapsed: get().isWorkspacePaneCollapsed,
-      preferredAgentProvider,
-      preferredReviewPassName: get().preferredReviewPassName,
-      themeMode: get().themeMode,
-    });
-  },
-  setPreferredReviewPassName: (preferredReviewPassName) => {
-    const nextPassName = preferredReviewPassName?.trim() || null;
-    set({ preferredReviewPassName: nextPassName });
-    writePersistedState({
-      commentDockWidth: get().commentDockWidth,
-      editorMode: get().editorMode,
-      isDocumentOutlineVisible: get().isDocumentOutlineVisible,
-      isFocusModeEnabled: get().isFocusModeEnabled,
-      isWorkspacePaneCollapsed: get().isWorkspacePaneCollapsed,
-      preferredAgentProvider: get().preferredAgentProvider,
-      preferredReviewPassName: nextPassName,
-      themeMode: get().themeMode,
-    });
-  },
-  setThemeMode: (themeMode) => {
-    set({ themeMode });
-    writePersistedState({
-      commentDockWidth: get().commentDockWidth,
-      editorMode: get().editorMode,
-      isDocumentOutlineVisible: get().isDocumentOutlineVisible,
-      isFocusModeEnabled: get().isFocusModeEnabled,
-      isWorkspacePaneCollapsed: get().isWorkspacePaneCollapsed,
-      preferredAgentProvider: get().preferredAgentProvider,
-      preferredReviewPassName: get().preferredReviewPassName,
-      themeMode,
-    });
-  },
-  setWorkspacePaneCollapsed: (isWorkspacePaneCollapsed) => {
-    set({ isWorkspacePaneCollapsed });
-    writePersistedState({
-      commentDockWidth: get().commentDockWidth,
-      editorMode: get().editorMode,
-      isDocumentOutlineVisible: get().isDocumentOutlineVisible,
-      isFocusModeEnabled: get().isFocusModeEnabled,
-      isWorkspacePaneCollapsed,
-      preferredAgentProvider: get().preferredAgentProvider,
-      preferredReviewPassName: get().preferredReviewPassName,
-      themeMode: get().themeMode,
-    });
-  },
-  toggleDocumentOutline: () => {
-    const nextVisible = !get().isDocumentOutlineVisible;
-    set({ isDocumentOutlineVisible: nextVisible });
-    writePersistedState({
-      commentDockWidth: get().commentDockWidth,
-      editorMode: get().editorMode,
-      isDocumentOutlineVisible: nextVisible,
-      isFocusModeEnabled: get().isFocusModeEnabled,
-      isWorkspacePaneCollapsed: get().isWorkspacePaneCollapsed,
-      preferredAgentProvider: get().preferredAgentProvider,
-      preferredReviewPassName: get().preferredReviewPassName,
-      themeMode: get().themeMode,
-    });
-  },
-  toggleFocusMode: () => {
-    const nextEnabled = !get().isFocusModeEnabled;
-    set({ isFocusModeEnabled: nextEnabled });
-    writePersistedState({
-      commentDockWidth: get().commentDockWidth,
-      editorMode: get().editorMode,
-      isDocumentOutlineVisible: get().isDocumentOutlineVisible,
-      isFocusModeEnabled: nextEnabled,
-      isWorkspacePaneCollapsed: get().isWorkspacePaneCollapsed,
-      preferredAgentProvider: get().preferredAgentProvider,
-      preferredReviewPassName: get().preferredReviewPassName,
-      themeMode: get().themeMode,
-    });
-  },
-  toggleWorkspacePane: () => {
-    const nextCollapsed = !get().isWorkspacePaneCollapsed;
-    set({ isWorkspacePaneCollapsed: nextCollapsed });
-    writePersistedState({
-      commentDockWidth: get().commentDockWidth,
-      editorMode: get().editorMode,
-      isDocumentOutlineVisible: get().isDocumentOutlineVisible,
-      isFocusModeEnabled: get().isFocusModeEnabled,
-      isWorkspacePaneCollapsed: nextCollapsed,
-      preferredAgentProvider: get().preferredAgentProvider,
-      preferredReviewPassName: get().preferredReviewPassName,
-      themeMode: get().themeMode,
-    });
-  },
-}));
+export const useUiStore = create<UiStore>()(
+  persist<UiStore, [], [], PersistedUiState>(
+    (set, get) => ({
+      ...defaultState,
+      reset: () => {
+        set(defaultState);
+        legacyCompatibleUiStorage.removeItem(STORAGE_KEY);
+      },
+      setCommentDockWidth: (commentDockWidth) =>
+        set({ commentDockWidth: clampCommentDockWidth(commentDockWidth) }),
+      setDocumentOutlineVisible: (isDocumentOutlineVisible) =>
+        set({ isDocumentOutlineVisible }),
+      setEditorMode: (editorMode) => set({ editorMode }),
+      setFocusModeEnabled: (isFocusModeEnabled) => set({ isFocusModeEnabled }),
+      setPreferredAgentProvider: (preferredAgentProvider) =>
+        set({ preferredAgentProvider }),
+      setPreferredReviewPassName: (preferredReviewPassName) =>
+        set({ preferredReviewPassName: normalizePreferredReviewPassName(preferredReviewPassName) }),
+      setThemeMode: (themeMode) => set({ themeMode: normalizeThemeMode(themeMode) }),
+      setWorkspacePaneCollapsed: (isWorkspacePaneCollapsed) =>
+        set({ isWorkspacePaneCollapsed }),
+      toggleDocumentOutline: () =>
+        set({ isDocumentOutlineVisible: !get().isDocumentOutlineVisible }),
+      toggleFocusMode: () => set({ isFocusModeEnabled: !get().isFocusModeEnabled }),
+      toggleWorkspacePane: () =>
+        set({ isWorkspacePaneCollapsed: !get().isWorkspacePaneCollapsed }),
+    }),
+    {
+      merge: (persistedState, currentState) => ({
+        ...currentState,
+        ...normalizePersistedUiState(persistedState),
+      }),
+      name: STORAGE_KEY,
+      partialize: persistedStateFromStore,
+      storage: createJSONStorage(() => legacyCompatibleUiStorage),
+    },
+  ),
+);
