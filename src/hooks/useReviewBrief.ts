@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { invokeBackend } from "../lib/backend";
 import { getErrorMessage } from "../lib/errorMessage";
+import { useReviewDataStore } from "../stores/reviewDataStore";
 import type { ProposalMutationResult, ProposalRecord } from "../types/proposal";
 import type { ReviewBriefEntry } from "../types/reviewBrief";
 import type { MessageRecord, ThreadRecord } from "../types/thread";
@@ -26,9 +27,13 @@ export function useReviewBrief({
   const [activeActionId, setActiveActionId] = useState<string | null>(null);
   const [activeActionKind, setActiveActionKind] = useState<BriefActionKind>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
-  const [isLoading, setIsLoading] = useState(false);
-  const [proposals, setProposals] = useState<ProposalRecord[]>([]);
-  const [threads, setThreads] = useState<ThreadRecord[]>([]);
+  const [isBriefLoading, setIsBriefLoading] = useState(false);
+  const isLoading = useReviewDataStore((state) => state.isLoading);
+  const proposals = useReviewDataStore((state) => state.proposals);
+  const setReviewData = useReviewDataStore((state) => state.setReviewData);
+  const threads = useReviewDataStore((state) => state.threads);
+  const upsertReviewProposal = useReviewDataStore((state) => state.upsertProposal);
+  const upsertReviewThread = useReviewDataStore((state) => state.upsertThread);
   const workspaceRoot = workspace?.rootPath ?? null;
 
   const entries = useMemo(
@@ -42,12 +47,10 @@ export function useReviewBrief({
 
   const loadBrief = useCallback(async () => {
     if (!workspaceRoot) {
-      setThreads([]);
-      setProposals([]);
       return;
     }
 
-    setIsLoading(true);
+    setIsBriefLoading(true);
     setErrorMessage(null);
 
     try {
@@ -59,14 +62,16 @@ export function useReviewBrief({
           workspaceRoot,
         }),
       ]);
-      setThreads(nextThreads);
-      setProposals(nextProposals);
+      setReviewData({
+        proposals: nextProposals,
+        threads: nextThreads,
+      });
     } catch (error) {
       setErrorMessage(getErrorMessage(error, "Unable to load the Review Brief."));
     } finally {
-      setIsLoading(false);
+      setIsBriefLoading(false);
     }
-  }, [workspaceRoot]);
+  }, [setReviewData, workspaceRoot]);
 
   useEffect(() => {
     if (!enabled) {
@@ -77,16 +82,12 @@ export function useReviewBrief({
   }, [enabled, loadBrief]);
 
   const upsertBriefProposal = useCallback((proposal: ProposalRecord) => {
-    setProposals((current) =>
-      sortByUpdatedAt([proposal, ...current.filter((entry) => entry.id !== proposal.id)]),
-    );
-  }, []);
+    upsertReviewProposal(proposal);
+  }, [upsertReviewProposal]);
 
   const upsertBriefThread = useCallback((thread: ThreadRecord) => {
-    setThreads((current) =>
-      sortByUpdatedAt([thread, ...current.filter((entry) => entry.id !== thread.id)]),
-    );
-  }, []);
+    upsertReviewThread(thread);
+  }, [upsertReviewThread]);
 
   const refreshBriefThreads = useCallback(
     async (threadIds: string[]) => {
@@ -104,15 +105,9 @@ export function useReviewBrief({
         ),
       );
 
-      setThreads((current) => {
-        const refreshedById = new Map(refreshedThreads.map((thread) => [thread.id, thread]));
-        return sortByUpdatedAt([
-          ...refreshedThreads,
-          ...current.filter((thread) => !refreshedById.has(thread.id)),
-        ]);
-      });
+      refreshedThreads.forEach(upsertReviewThread);
     },
-    [workspaceRoot],
+    [upsertReviewThread, workspaceRoot],
   );
 
   const acceptProposal = useCallback(async (proposalId: string, updatedDocumentText?: string) => {
@@ -221,7 +216,7 @@ export function useReviewBrief({
       activeActionKind,
       entries,
       errorMessage,
-      isLoading,
+      isLoading: isLoading || isBriefLoading,
       loadBrief,
       rejectProposal,
       replyToThread,
@@ -233,6 +228,7 @@ export function useReviewBrief({
       activeActionKind,
       entries,
       errorMessage,
+      isBriefLoading,
       isLoading,
       loadBrief,
       rejectProposal,
@@ -332,12 +328,4 @@ function excerpt(value: string, limit = 220) {
   }
 
   return `${normalized.slice(0, limit - 3)}...`;
-}
-
-function sortByUpdatedAt<T extends { createdAt: string; updatedAt: string }>(records: T[]) {
-  return [...records].sort((left, right) => {
-    const rightTimestamp = right.updatedAt || right.createdAt;
-    const leftTimestamp = left.updatedAt || left.createdAt;
-    return rightTimestamp.localeCompare(leftTimestamp);
-  });
 }

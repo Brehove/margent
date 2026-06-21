@@ -19,7 +19,7 @@ use crate::models::provider::{
 };
 use crate::models::thread::{AnchorRecord, ThreadRecord};
 
-use super::{anchor_service, diff_service, file_service, thread_service};
+use super::{anchor_service, diff_service, file_service, thread_service, workspace_service};
 
 const PROVIDER_TIMEOUT_SECONDS: u64 = 600;
 pub const PROVIDER_STREAM_EVENT: &str = "margent://provider-stream";
@@ -529,36 +529,17 @@ fn load_document_context(
     document_id: &str,
     document_relative_path: Option<&str>,
 ) -> Result<(DocumentRecord, PathBuf, String), String> {
-    if let Some(record) = file_service::read_document_record_by_id(workspace_root, document_id)? {
+    if let Some(record) =
+        workspace_service::hydrate_document_record_by_id(workspace_root, document_id)?
+    {
         return read_document_context_for_record(workspace_root, record);
     }
 
-    let mdreview_path = file_service::ensure_workspace_layout(workspace_root)?;
-    let documents_dir = mdreview_path.join("documents");
-    let mut fallback_by_relative_path = None;
-
-    for entry in fs::read_dir(&documents_dir)
-        .map_err(|error| format!("Unable to read {}: {error}", documents_dir.display()))?
-    {
-        let entry =
-            entry.map_err(|error| format!("Unable to inspect document records: {error}"))?;
-        let path = entry.path();
-
-        if !path.is_file() {
-            continue;
-        }
-
-        let Some(record) = file_service::read_scanned_json::<DocumentRecord>(&path, "document")?
-        else {
-            continue;
-        };
-
-        if document_relative_path == Some(record.relative_path.as_str()) {
-            fallback_by_relative_path = Some(record);
-        }
-    }
-
-    if let Some(record) = fallback_by_relative_path {
+    if let Some(relative_path) = document_relative_path {
+        let record = workspace_service::hydrate_document_record_by_relative_path(
+            workspace_root,
+            relative_path,
+        )?;
         return read_document_context_for_record(workspace_root, record);
     }
 
