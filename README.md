@@ -93,21 +93,21 @@ npm run tauri build
 ```
 
 The built app is written under `target/release/bundle/macos/Margent.app`.
-For an agent-first local install on the Mac that built it, copy the app bundle
-into the user's Applications folder with `ditto`:
+For an agent-first local install on the Mac that built it, use the local
+installer script:
 
 ```sh
-osascript -e 'quit app "Margent"' 2>/dev/null || true
-npm run tauri build
-mkdir -p ~/Applications
-ditto target/release/bundle/macos/Margent.app ~/Applications/Margent.app
-open ~/Applications/Margent.app
+npm run install:local-app
 ```
 
-Use `ditto`, not `cp -R`, because it preserves app bundle metadata more
-reliably. This local source build is not the same as a signed and notarized
-public distribution artifact. To update Margent from source, rerun the build and
-`ditto` steps. For development iteration, use `npm run tauri dev`.
+By default, this builds the app, installs it to `/Applications/Margent.app`,
+warns when both `/Applications/Margent.app` and `~/Applications/Margent.app`
+exist, verifies the copied binary, and launches the installed app. Use
+`npm run install:local-app -- --target user` for `~/Applications`, or
+`npm run install:local-app -- --target both` to synchronize both standard
+locations. If `/Applications` is not writable on your Mac, use `--target user`.
+This local source build is not the same as a signed and notarized public
+distribution artifact. For development iteration, use `npm run tauri dev`.
 
 ## CLI Install
 

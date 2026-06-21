@@ -27,11 +27,7 @@ npm run build
 cargo test --workspace --locked
 cargo install --locked --path cli
 margent install --agent-skills
-osascript -e 'quit app "Margent"' 2>/dev/null || true
-npm run tauri build
-mkdir -p ~/Applications
-ditto target/release/bundle/macos/Margent.app ~/Applications/Margent.app
-open ~/Applications/Margent.app
+npm run install:local-app
 claude auth login
 ```
 
@@ -90,20 +86,20 @@ copy.
    already exists, leave it untouched unless the user explicitly approves
    `margent install --agent-skills --force`.
 
-6. Install the desktop app into `~/Applications`:
+6. Install the desktop app into `/Applications`:
 
    ```sh
-   osascript -e 'quit app "Margent"' 2>/dev/null || true
-   npm run tauri build
-   mkdir -p ~/Applications
-   ditto target/release/bundle/macos/Margent.app ~/Applications/Margent.app
-   open ~/Applications/Margent.app
+   npm run install:local-app
    ```
 
-   Use `ditto`, not `cp -R`, because it preserves app bundle metadata more
-   reliably. This is a local build intended for the Mac that built it. It is
-   not the same as a signed and notarized public distribution artifact. To
-   update Margent from source, rerun the build and `ditto` steps.
+   The script builds the app, installs it, verifies the copied binary, relaunches
+   Margent, and warns if both `/Applications/Margent.app` and
+   `~/Applications/Margent.app` exist. Use
+   `npm run install:local-app -- --target user` for `~/Applications`, or
+   `npm run install:local-app -- --target both` to synchronize both standard
+   locations. If `/Applications` is not writable on your Mac, use
+   `--target user`. This is a local build intended for the Mac that built it.
+   It is not the same as a signed and notarized public distribution artifact.
 
    For development iteration, run the app from Tauri instead of installing it:
 
