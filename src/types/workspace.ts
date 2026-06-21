@@ -1,3 +1,5 @@
+import type { DocumentSnapshotRecord } from "./snapshot";
+
 export interface HeadingIndexEntry {
   depth: number;
   text: string;
@@ -62,6 +64,11 @@ export interface WorkspaceSnapshot {
 export interface AssetImportResult {
   absolutePath: string;
   relativePath: string;
+}
+
+export interface DocumentSnapshotRevertResult {
+  snapshot: DocumentSnapshotRecord;
+  document: DocumentPayload;
 }
 
 export interface WorkspaceOpenRequest {

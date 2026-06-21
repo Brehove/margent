@@ -12,7 +12,7 @@ use crate::models::document::{
     SaveDocumentIfCurrentResult,
 };
 use crate::models::proposal::ProposalRecord;
-use crate::models::snapshot::DocumentSnapshotRecord;
+use crate::models::snapshot::{DocumentSnapshotRecord, DocumentSnapshotRevertResult};
 use crate::models::thread::ThreadRecord;
 use crate::models::workspace::{AssetImportResult, WorkspaceRecord, WorkspaceSnapshot};
 
@@ -297,6 +297,120 @@ pub fn snapshot_document(
     file_service::write_json_atomic(&snapshot_path, &record)?;
     prune_document_snapshots(&mdreview_path, &document.id)?;
     Ok(record)
+}
+
+pub fn list_document_snapshots(
+    workspace_root: &str,
+    relative_path: Option<&str>,
+) -> Result<Vec<DocumentSnapshotRecord>, String> {
+    let root_path = Path::new(workspace_root);
+    let normalized_relative_path = relative_path
+        .map(|path| normalize_document_relative_path(root_path, path))
+        .transpose()?;
+    list_document_snapshots_for_root(root_path, normalized_relative_path.as_deref())
+}
+
+pub fn revert_latest_snapshot(
+    workspace_root: &str,
+    relative_path: Option<&str>,
+) -> Result<DocumentSnapshotRevertResult, String> {
+    let root_path = Path::new(workspace_root);
+    let snapshot = load_latest_snapshot(root_path, relative_path)?;
+    let document_path =
+        file_service::resolve_new_document_path(root_path, &snapshot.relative_path)?;
+    let parent = document_path.parent().ok_or_else(|| {
+        format!(
+            "Unable to derive the parent directory for {}.",
+            snapshot.relative_path
+        )
+    })?;
+
+    fs::create_dir_all(parent)
+        .map_err(|error| format!("Unable to create {}: {error}", parent.display()))?;
+    file_service::write_string_atomic(&document_path, &snapshot.content)?;
+    let version = document_version_for_path_and_content(&document_path, &snapshot.content)?;
+    let record = upsert_document_record(root_path, &snapshot.relative_path, &snapshot.content)?;
+    schedule_document_thread_reattach(
+        root_path.to_path_buf(),
+        record.clone(),
+        snapshot.content.clone(),
+    );
+
+    thread_service::append_event(
+        root_path,
+        "document.reverted",
+        None,
+        Some(&record.id),
+        snapshot.proposal_id.as_deref(),
+        Some(&snapshot.id),
+    )?;
+
+    let document = record.into_payload(
+        document_path.to_string_lossy().to_string(),
+        snapshot.content.clone(),
+        version,
+    );
+
+    Ok(DocumentSnapshotRevertResult { snapshot, document })
+}
+
+fn load_latest_snapshot(
+    root_path: &Path,
+    relative_path: Option<&str>,
+) -> Result<DocumentSnapshotRecord, String> {
+    let normalized_relative_path = relative_path
+        .map(|path| normalize_document_relative_path(root_path, path))
+        .transpose()?;
+    list_document_snapshots_for_root(root_path, normalized_relative_path.as_deref())?
+        .into_iter()
+        .next()
+        .ok_or_else(|| "No Margent document snapshots found.".into())
+}
+
+fn list_document_snapshots_for_root(
+    root_path: &Path,
+    relative_path: Option<&str>,
+) -> Result<Vec<DocumentSnapshotRecord>, String> {
+    let mdreview_path = file_service::ensure_workspace_layout(root_path)?;
+    let snapshots_dir = mdreview_path.join("snapshots");
+    let mut snapshots = Vec::new();
+
+    for path in json_files_in_directory(&snapshots_dir)? {
+        let Some(snapshot) =
+            file_service::read_scanned_json::<DocumentSnapshotRecord>(&path, "snapshot")?
+        else {
+            continue;
+        };
+
+        if relative_path
+            .map(|expected| snapshot.relative_path == expected)
+            .unwrap_or(true)
+        {
+            snapshots.push(snapshot);
+        }
+    }
+
+    snapshots.sort_by(|left, right| {
+        right
+            .created_at
+            .cmp(&left.created_at)
+            .then_with(|| right.id.cmp(&left.id))
+    });
+    Ok(snapshots)
+}
+
+fn normalize_document_relative_path(
+    root_path: &Path,
+    relative_path: &str,
+) -> Result<String, String> {
+    let document_path = file_service::resolve_new_document_path(root_path, relative_path)?;
+    let canonical_root = root_path.canonicalize().map_err(|error| {
+        format!(
+            "Unable to resolve workspace root {}: {error}",
+            root_path.display()
+        )
+    })?;
+    file_service::relative_path_string(&canonical_root, &document_path)
 }
 
 fn prune_document_snapshots(mdreview_path: &Path, document_id: &str) -> Result<(), String> {
@@ -1301,6 +1415,88 @@ mod tests {
         assert_eq!(snapshot.relative_path, "delete-me.md");
         assert_eq!(snapshot.content, "Alpha beta\n");
         assert_eq!(snapshot.reason, "delete");
+
+        fs::remove_dir_all(&workspace_root).expect("cleanup temp workspace");
+    }
+
+    #[test]
+    fn list_document_snapshots_filters_by_normalized_relative_path() {
+        let workspace_root = unique_temp_dir("margent-list-snapshots");
+        fs::create_dir_all(&workspace_root).expect("create temp workspace");
+        let draft_content = "Draft snapshot\n";
+        let notes_content = "Notes snapshot\n";
+        fs::write(workspace_root.join("draft.md"), draft_content).expect("write draft");
+        fs::create_dir_all(workspace_root.join("notes")).expect("create notes");
+        fs::write(workspace_root.join("notes/other.md"), notes_content).expect("write other");
+        let draft = upsert_document_record(&workspace_root, "draft.md", draft_content)
+            .expect("index draft");
+        let other = upsert_document_record(&workspace_root, "notes/other.md", notes_content)
+            .expect("index other");
+
+        snapshot_document(&workspace_root, &draft, draft_content, "test", None)
+            .expect("snapshot draft");
+        snapshot_document(&workspace_root, &other, notes_content, "test", None)
+            .expect("snapshot other");
+
+        let all = list_document_snapshots(workspace_root.to_str().expect("root str"), None)
+            .expect("list all snapshots");
+        assert_eq!(all.len(), 2);
+
+        let filtered = list_document_snapshots(
+            workspace_root.to_str().expect("root str"),
+            Some("./notes/other.md"),
+        )
+        .expect("list filtered snapshots");
+        assert_eq!(filtered.len(), 1);
+        assert_eq!(filtered[0].relative_path, "notes/other.md");
+        assert_eq!(filtered[0].content, notes_content);
+
+        fs::remove_dir_all(&workspace_root).expect("cleanup temp workspace");
+    }
+
+    #[test]
+    fn revert_latest_snapshot_restores_document_content_and_record() {
+        let workspace_root = unique_temp_dir("margent-tauri-revert-snapshot");
+        fs::create_dir_all(&workspace_root).expect("create temp workspace");
+        let original = "# Draft\n\nOriginal body.\n";
+        let changed = "# Draft\n\nChanged body.\n";
+        fs::write(workspace_root.join("draft.md"), original).expect("write original");
+        let document =
+            upsert_document_record(&workspace_root, "draft.md", original).expect("index original");
+        let snapshot = snapshot_document(
+            &workspace_root,
+            &document,
+            original,
+            "proposal.accept",
+            Some("proposal_test"),
+        )
+        .expect("snapshot original");
+        fs::write(workspace_root.join("draft.md"), changed).expect("write changed");
+        upsert_document_record(&workspace_root, "draft.md", changed).expect("index changed");
+
+        let result =
+            revert_latest_snapshot(workspace_root.to_str().expect("root str"), Some("draft.md"))
+                .expect("revert latest snapshot");
+
+        assert_eq!(result.snapshot.id, snapshot.id);
+        assert_eq!(result.document.relative_path, "draft.md");
+        assert_eq!(result.document.content, original);
+        assert_eq!(
+            result.document.current_content_hash,
+            file_service::content_hash(original)
+        );
+        assert_eq!(
+            fs::read_to_string(workspace_root.join("draft.md")).expect("read restored"),
+            original
+        );
+        let restored_record =
+            file_service::read_document_record_by_id(&workspace_root, &document.id)
+                .expect("read document sidecar")
+                .expect("document sidecar");
+        assert_eq!(
+            restored_record.current_content_hash,
+            file_service::content_hash(original)
+        );
 
         fs::remove_dir_all(&workspace_root).expect("cleanup temp workspace");
     }

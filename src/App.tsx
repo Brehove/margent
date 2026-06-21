@@ -36,6 +36,7 @@ import {
   refreshWorkspaceFiles,
   revealMarkdownFile,
   reloadSaveConflictDiskVersion,
+  revertLatestSnapshotForActiveDocument,
   saveCurrentDocument,
   useWorkspaceEffects,
 } from "./hooks/useWorkspace";
@@ -421,6 +422,17 @@ function App() {
         id: "delete-active-file",
         label: "Delete Active File",
         keywords: ["remove", "document"],
+      },
+      {
+        detail: activeDocument
+          ? isEditorDirty
+            ? "Save the draft before reverting"
+            : activeDocument.relativePath
+          : "Open a document first",
+        disabled: !activeDocument || isEditorDirty,
+        id: "revert-last-snapshot",
+        label: "Revert Last Snapshot",
+        keywords: ["restore", "snapshot", "undo", "rollback"],
       },
       {
         id: "open-file",
@@ -822,6 +834,9 @@ function App() {
           void revealMarkdownFile(activeDocument.relativePath);
         }
         break;
+      case "revert-last-snapshot":
+        void revertLatestSnapshotForActiveDocument();
+        break;
       case "save":
         dispatchEditorMenuCommand(APP_MENU_COMMANDS.save);
         break;
@@ -896,6 +911,9 @@ function App() {
           break;
         case APP_MENU_COMMANDS.revealActiveFile:
           handlePaletteCommand("reveal-active-file");
+          break;
+        case APP_MENU_COMMANDS.revertLastSnapshot:
+          handlePaletteCommand("revert-last-snapshot");
           break;
         case APP_MENU_COMMANDS.reviewBrief:
           handlePaletteCommand("review-brief");

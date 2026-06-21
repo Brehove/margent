@@ -1,5 +1,7 @@
 use serde::{Deserialize, Serialize};
 
+use crate::models::document::DocumentPayload;
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DocumentSnapshotRecord {
@@ -11,4 +13,11 @@ pub struct DocumentSnapshotRecord {
     pub created_at: String,
     pub reason: String,
     pub proposal_id: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DocumentSnapshotRevertResult {
+    pub snapshot: DocumentSnapshotRecord,
+    pub document: DocumentPayload,
 }
