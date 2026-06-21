@@ -64,17 +64,22 @@ pub fn open_workspace(path: &str) -> Result<WorkspaceSnapshot, String> {
 
     let mut documents = Vec::new();
     let mut selected_relative_path = None;
+    let markdown_files = file_service::list_markdown_files(&root_path)?;
+    let selected_markdown_file = opened_path
+        .clone()
+        .or_else(|| markdown_files.first().cloned());
 
-    for markdown_file in file_service::list_markdown_files(&root_path)? {
-        let content = fs::read_to_string(&markdown_file)
-            .map_err(|error| format!("Unable to read {}: {error}", markdown_file.display()))?;
+    for markdown_file in markdown_files {
         let relative_path = file_service::relative_path_string(&root_path, &markdown_file)?;
 
-        if opened_path.as_ref() == Some(&markdown_file) {
+        let record = if selected_markdown_file.as_ref() == Some(&markdown_file) {
             selected_relative_path = Some(relative_path.clone());
-        }
-
-        let record = upsert_document_record(&root_path, &relative_path, &content)?;
+            let content = fs::read_to_string(&markdown_file)
+                .map_err(|error| format!("Unable to read {}: {error}", markdown_file.display()))?;
+            upsert_document_record(&root_path, &relative_path, &content)?
+        } else {
+            summarize_document_without_content(&root_path, &relative_path, &markdown_file)?
+        };
         documents.push(record);
     }
 
@@ -100,6 +105,37 @@ pub fn read_document(workspace_root: &str, relative_path: &str) -> Result<Docume
         content,
         version,
     ))
+}
+
+pub(crate) fn hydrate_document_record_by_id(
+    root_path: &Path,
+    document_id: &str,
+) -> Result<Option<DocumentRecord>, String> {
+    if let Some(record) = read_document_record(root_path, document_id)? {
+        return Ok(Some(record));
+    }
+
+    for markdown_file in file_service::list_markdown_files(root_path)? {
+        let relative_path = file_service::relative_path_string(root_path, &markdown_file)?;
+        if file_service::document_id(&relative_path) != document_id {
+            continue;
+        }
+
+        return hydrate_document_record_by_relative_path(root_path, &relative_path).map(Some);
+    }
+
+    Ok(None)
+}
+
+pub(crate) fn hydrate_document_record_by_relative_path(
+    root_path: &Path,
+    relative_path: &str,
+) -> Result<DocumentRecord, String> {
+    let document_path = file_service::resolve_document_path(root_path, relative_path)?;
+    let content = fs::read_to_string(&document_path)
+        .map_err(|error| format!("Unable to read {}: {error}", document_path.display()))?;
+
+    upsert_document_record(root_path, relative_path, &content)
 }
 
 pub fn create_markdown_file(
@@ -723,6 +759,48 @@ fn upsert_document_record(
     )
 }
 
+fn summarize_document_without_content(
+    root_path: &Path,
+    relative_path: &str,
+    document_path: &Path,
+) -> Result<DocumentRecord, String> {
+    let document_id = file_service::document_id(relative_path);
+    if let Some(record) = read_document_record(root_path, &document_id)? {
+        if record.relative_path == relative_path {
+            return Ok(record);
+        }
+    }
+
+    let metadata = fs::metadata(document_path)
+        .map_err(|error| format!("Unable to inspect {}: {error}", document_path.display()))?;
+    let modified_ns = metadata
+        .modified()
+        .ok()
+        .and_then(|modified| modified.duration_since(UNIX_EPOCH).ok())
+        .map(|duration| duration.as_nanos())
+        .unwrap_or_default();
+    let now = file_service::now_rfc3339()?;
+    let display_name = Path::new(relative_path)
+        .file_name()
+        .and_then(|value| value.to_str())
+        .unwrap_or(relative_path)
+        .to_string();
+
+    Ok(DocumentRecord {
+        schema_version: 1,
+        id: document_id,
+        relative_path: relative_path.to_string(),
+        display_name,
+        created_at: now.clone(),
+        updated_at: now,
+        current_content_hash: format!("unindexed:{modified_ns}:{}", metadata.len()),
+        last_known_line_ending: "lf".into(),
+        frontmatter_mode: "none".into(),
+        word_count: 0,
+        heading_index: Vec::new(),
+    })
+}
+
 fn write_document_record(
     root_path: &Path,
     relative_path: &str,
@@ -998,6 +1076,86 @@ mod tests {
         )
         .expect_err("reject reserved sidecar directory");
         assert!(reserved_error.contains("reserved"));
+
+        fs::remove_dir_all(&workspace_root).expect("cleanup temp workspace");
+    }
+
+    #[test]
+    fn open_workspace_summarizes_unselected_documents_without_reading_or_persisting() {
+        let workspace_root = unique_temp_dir("margent-lazy-open-directory");
+        fs::create_dir_all(&workspace_root).expect("create temp workspace");
+        fs::write(workspace_root.join("a-good.md"), "# Good\n\nAlpha beta\n").expect("write good");
+        fs::write(workspace_root.join("z-bad.md"), [0xff, 0xfe, 0xfd]).expect("write invalid utf8");
+
+        let workspace =
+            open_workspace(workspace_root.to_str().expect("root str")).expect("open workspace");
+
+        assert_eq!(workspace.documents.len(), 2);
+        assert_eq!(
+            workspace.selected_relative_path.as_deref(),
+            Some("a-good.md")
+        );
+        let bad = workspace
+            .documents
+            .iter()
+            .find(|document| document.relative_path == "z-bad.md")
+            .expect("bad document summary");
+        assert!(bad.current_content_hash.starts_with("unindexed:"));
+        assert_eq!(bad.word_count, 0);
+        assert!(bad.heading_index.is_empty());
+
+        let document_sidecars =
+            json_files_in_directory(&workspace_root.join(".mdreview").join("documents"))
+                .expect("document sidecars");
+        assert_eq!(document_sidecars.len(), 1);
+
+        fs::remove_dir_all(&workspace_root).expect("cleanup temp workspace");
+    }
+
+    #[test]
+    fn open_workspace_hydrates_only_the_opened_document() {
+        let workspace_root = unique_temp_dir("margent-lazy-open-file");
+        fs::create_dir_all(&workspace_root).expect("create temp workspace");
+        let opened_path = workspace_root.join("open.md");
+        fs::write(&opened_path, "# Open\n\nAlpha beta\n").expect("write opened");
+        fs::write(
+            workspace_root.join("closed.md"),
+            "# Closed\n\nGamma delta\n",
+        )
+        .expect("write closed");
+
+        let workspace =
+            open_workspace(opened_path.to_str().expect("opened path")).expect("open workspace");
+
+        assert_eq!(workspace.selected_relative_path.as_deref(), Some("open.md"));
+        let opened = workspace
+            .documents
+            .iter()
+            .find(|document| document.relative_path == "open.md")
+            .expect("opened document");
+        assert!(opened.current_content_hash.starts_with("sha256:"));
+        assert_eq!(opened.word_count, 4);
+        assert_eq!(opened.heading_index.len(), 1);
+
+        let closed = workspace
+            .documents
+            .iter()
+            .find(|document| document.relative_path == "closed.md")
+            .expect("closed document");
+        assert!(closed.current_content_hash.starts_with("unindexed:"));
+        assert_eq!(closed.word_count, 0);
+
+        let document_sidecars =
+            json_files_in_directory(&workspace_root.join(".mdreview").join("documents"))
+                .expect("document sidecars");
+        assert_eq!(document_sidecars.len(), 1);
+        let expected_sidecar_name = format!("{}.json", opened.id);
+        assert_eq!(
+            document_sidecars[0]
+                .file_name()
+                .and_then(|value| value.to_str()),
+            Some(expected_sidecar_name.as_str())
+        );
 
         fs::remove_dir_all(&workspace_root).expect("cleanup temp workspace");
     }
