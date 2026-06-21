@@ -159,7 +159,6 @@ function App() {
   const { upsertProposal } = proposalState;
   const reviewBriefState = useReviewBrief({
     activeDocument,
-    enabled: appView === "review-brief",
     onActiveDocumentApplied: setActiveDocument,
     onActiveThreadUpdated: upsertThread,
     workspace,

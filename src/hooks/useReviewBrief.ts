@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import { invokeBackend } from "../lib/backend";
 import { getErrorMessage } from "../lib/errorMessage";
 import { useReviewDataStore } from "../stores/reviewDataStore";
@@ -9,7 +9,6 @@ import type { DocumentPayload, DocumentSummary, WorkspaceSnapshot } from "../typ
 
 interface UseReviewBriefOptions {
   activeDocument: DocumentPayload | null;
-  enabled?: boolean;
   onActiveDocumentApplied?: (document: DocumentPayload) => void;
   onActiveThreadUpdated?: (thread: ThreadRecord) => void;
   workspace: WorkspaceSnapshot | null;
@@ -19,7 +18,6 @@ type BriefActionKind = "accept" | "reject" | "reply" | null;
 
 export function useReviewBrief({
   activeDocument,
-  enabled = true,
   onActiveDocumentApplied,
   onActiveThreadUpdated,
   workspace,
@@ -72,14 +70,6 @@ export function useReviewBrief({
       setIsBriefLoading(false);
     }
   }, [setReviewData, workspaceRoot]);
-
-  useEffect(() => {
-    if (!enabled) {
-      return;
-    }
-
-    void loadBrief();
-  }, [enabled, loadBrief]);
 
   const upsertBriefProposal = useCallback((proposal: ProposalRecord) => {
     upsertReviewProposal(proposal);
