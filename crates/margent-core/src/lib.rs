@@ -10,6 +10,7 @@ pub mod export;
 pub mod id;
 pub mod io;
 pub mod proposal;
+pub mod provider_parse;
 pub mod provider_readiness;
 pub mod review_context;
 pub mod thread;

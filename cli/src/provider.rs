@@ -7,6 +7,8 @@ use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
 use crate::models::*;
+use margent_core::provider_parse;
+use margent_core::provider_readiness::ProviderKind;
 use serde::{Deserialize, Serialize};
 use wait_timeout::ChildExt;
 
@@ -49,6 +51,13 @@ impl Provider {
             .output()
             .map(|o| o.status.success())
             .unwrap_or(false)
+    }
+}
+
+fn provider_kind(provider: Provider) -> ProviderKind {
+    match provider {
+        Provider::Codex => ProviderKind::Codex,
+        Provider::Claude => ProviderKind::Claude,
     }
 }
 
@@ -719,39 +728,7 @@ fn configure_provider_command(
 }
 
 fn extract_session_id(provider: Provider, stdout: &str, stderr: &str) -> Option<String> {
-    match provider {
-        Provider::Claude => extract_json_session_id(stdout),
-        Provider::Codex => {
-            extract_json_session_id(stdout).or_else(|| extract_json_session_id(stderr))
-        }
-    }
-}
-
-fn extract_json_session_id(text: &str) -> Option<String> {
-    for line in text.lines() {
-        let trimmed = line.trim();
-        if trimmed.is_empty() {
-            continue;
-        }
-
-        if let Ok(value) = serde_json::from_str::<serde_json::Value>(trimmed) {
-            if let Some(session_id) = value
-                .get("session_id")
-                .or_else(|| value.get("sessionId"))
-                .or_else(|| value.get("thread_id"))
-                .or_else(|| value.get("threadId"))
-                .or_else(|| value.get("conversation_id"))
-                .or_else(|| value.get("conversationId"))
-                .and_then(|value| value.as_str())
-                .map(str::trim)
-                .filter(|value| !value.is_empty())
-            {
-                return Some(session_id.to_string());
-            }
-        }
-    }
-
-    None
+    provider_parse::extract_session_id(provider_kind(provider), stdout, stderr)
 }
 
 fn configure_provider_environment(command: &mut Command, provider: Provider) {
@@ -940,37 +917,12 @@ pub fn parse_feedback_response(
     provider: Provider,
     response: &ProviderResponse,
 ) -> Result<String, String> {
-    let raw = response.stdout.trim().to_string();
+    let raw = response.stdout.trim();
     if raw.is_empty() {
         return Err("Provider returned empty output.".into());
     }
 
-    if let Some(stream_text) = provider_stream_response_text(provider, &raw) {
-        return Ok(stream_text);
-    }
-
-    match provider {
-        Provider::Claude => {
-            // Claude with --output-format json returns {"result": "..."}
-            if let Ok(val) = serde_json::from_str::<serde_json::Value>(&raw) {
-                if let Some(result) = val.get("result").and_then(|v| v.as_str()) {
-                    return Ok(result.to_string());
-                }
-                // Might be a different structure; try to extract text
-                if let Some(text) = val.as_str() {
-                    return Ok(text.to_string());
-                }
-                // Fall through: return the whole JSON as string
-                return Ok(val.to_string());
-            }
-            // Not JSON — return as-is
-            Ok(raw)
-        }
-        Provider::Codex => {
-            // Codex returns plain text
-            Ok(raw)
-        }
-    }
+    provider_parse::parse_feedback_response(provider_kind(provider), raw)
 }
 
 /// For revision: extract the assistant message and updated document text.
@@ -990,44 +942,16 @@ pub fn parse_revision_response(
     provider: Provider,
     response: &ProviderResponse,
 ) -> Result<RevisionResult, String> {
-    let parsed = parse_provider_revision_json(
-        provider,
-        response,
-        &["updatedDocumentText", "replacementText"],
-    )?;
-
-    let assistant_message = parsed
-        .get("assistantMessage")
-        .and_then(|v| v.as_str())
-        .unwrap_or("")
-        .to_string();
-
-    let updated_document_text = parsed
-        .get("updatedDocumentText")
-        .and_then(|v| v.as_str())
-        .or_else(|| parsed.get("replacementText").and_then(|v| v.as_str()))
-        .ok_or_else(|| {
-            format!(
-                "Provider response missing 'updatedDocumentText' field.\nParsed JSON:\n{parsed}"
-            )
-        })?
-        .to_string();
-
-    let resolve_thread_ids = parsed
-        .get("resolveThreadIds")
-        .and_then(|value| value.as_array())
-        .map(|values| {
-            values
-                .iter()
-                .filter_map(|value| value.as_str().map(str::to_string))
-                .collect::<Vec<_>>()
-        })
-        .unwrap_or_default();
+    let raw = response.stdout.trim();
+    if raw.is_empty() {
+        return Err("Provider returned empty output.".into());
+    }
+    let parsed = provider_parse::parse_document_revision_response(provider_kind(provider), raw)?;
 
     Ok(RevisionResult {
-        assistant_message,
-        updated_document_text,
-        resolve_thread_ids,
+        assistant_message: parsed.assistant_message,
+        updated_document_text: parsed.updated_document_text,
+        resolve_thread_ids: parsed.resolve_thread_ids,
     })
 }
 
@@ -1035,417 +959,34 @@ pub fn parse_focused_revision_response(
     provider: Provider,
     response: &ProviderResponse,
 ) -> Result<FocusedRevisionResult, String> {
-    let parsed = match parse_provider_revision_json(provider, response, &["replacementText"]) {
-        Ok(parsed) => parsed,
-        Err(error) => {
-            let raw = response.stdout.trim();
-            let response_text = provider_json_text(provider, raw);
-            if let Some(fallback) = focused_revision_from_plain_text(&response_text) {
-                return Ok(fallback);
-            }
-            return Err(error);
-        }
-    };
-
-    let assistant_message = parsed
-        .get("assistantMessage")
-        .and_then(|v| v.as_str())
-        .unwrap_or("")
-        .to_string();
-
-    let replacement_text = parsed
-        .get("replacementText")
-        .and_then(|v| v.as_str())
-        .ok_or_else(|| {
-            format!("Provider response missing 'replacementText' field.\nParsed JSON:\n{parsed}")
-        })?
-        .to_string();
-
-    let resolve_thread_ids = parsed
-        .get("resolveThreadIds")
-        .and_then(|value| value.as_array())
-        .map(|values| {
-            values
-                .iter()
-                .filter_map(|value| value.as_str().map(str::to_string))
-                .collect::<Vec<_>>()
-        })
-        .unwrap_or_default();
-
-    Ok(FocusedRevisionResult {
-        assistant_message,
-        replacement_text,
-        resolve_thread_ids,
-    })
-}
-
-fn focused_revision_from_plain_text(response_text: &str) -> Option<FocusedRevisionResult> {
-    let replacement_text = plain_replacement_text(response_text)?;
-    Some(FocusedRevisionResult {
-        assistant_message: "Proposed a replacement for the selected passage.".into(),
-        replacement_text,
-        resolve_thread_ids: Vec::new(),
-    })
-}
-
-fn plain_replacement_text(response_text: &str) -> Option<String> {
-    let mut candidate = extract_json_block(response_text).trim().to_string();
-    if candidate.is_empty() || candidate.starts_with('{') {
-        return None;
-    }
-
-    for prefix in [
-        "Here is the revised passage:",
-        "Here's the revised passage:",
-        "Revised passage:",
-        "Replacement:",
-        "replacementText:",
-    ] {
-        if candidate
-            .get(..prefix.len())
-            .is_some_and(|value| value.eq_ignore_ascii_case(prefix))
-        {
-            candidate = candidate[prefix.len()..].trim().to_string();
-            break;
-        }
-    }
-
-    (!candidate.trim().is_empty()).then_some(candidate)
-}
-
-fn parse_provider_revision_json(
-    provider: Provider,
-    response: &ProviderResponse,
-    expected_keys: &[&str],
-) -> Result<serde_json::Value, String> {
-    let raw = response.stdout.trim().to_string();
+    let raw = response.stdout.trim();
     if raw.is_empty() {
         return Err("Provider returned empty output.".into());
     }
+    let parsed = provider_parse::parse_focused_revision_response(provider_kind(provider), raw)?;
 
-    let json_text = provider_json_text(provider, &raw);
-    parse_revision_json(&json_text, expected_keys).map_err(|e| {
-        format!(
-            "Unable to parse provider revision response as JSON: {e}. Response began: {}\nRaw output:\n{raw}",
-            preview_provider_text(&json_text)
-        )
+    Ok(FocusedRevisionResult {
+        assistant_message: parsed.assistant_message,
+        replacement_text: parsed.replacement_text,
+        resolve_thread_ids: parsed.resolve_thread_ids,
     })
 }
 
 fn provider_json_text(provider: Provider, raw: &str) -> String {
-    if let Some(stream_text) = provider_stream_response_text(provider, raw) {
-        return stream_text;
-    }
-
-    match provider {
-        Provider::Claude => {
-            if let Ok(val) = serde_json::from_str::<serde_json::Value>(raw) {
-                if let Some(result) = val.get("result").and_then(|v| v.as_str()) {
-                    return result.to_string();
-                }
-            }
-            raw.to_string()
-        }
-        Provider::Codex => raw.to_string(),
-    }
-}
-
-fn provider_stream_response_text(provider: Provider, raw: &str) -> Option<String> {
-    let mut last_result: Option<String> = None;
-    let mut delta_text = String::new();
-
-    for line in raw.lines() {
-        let trimmed = line.trim();
-        if trimmed.is_empty() {
-            continue;
-        }
-        let Ok(value) = serde_json::from_str::<serde_json::Value>(trimmed) else {
-            continue;
-        };
-        if let Some(result) = value.get("result").and_then(|value| value.as_str()) {
-            last_result = Some(result.to_string());
-            continue;
-        }
-        if let Some(result) = value
-            .get("message")
-            .and_then(|message| message.get("result"))
-            .and_then(|value| value.as_str())
-        {
-            last_result = Some(result.to_string());
-            continue;
-        }
-        if let Some(delta) = provider_stream_delta_from_value(provider, &value) {
-            let _ = stream_delta_suffix(&mut delta_text, &delta);
-        }
-    }
-
-    if let Some(result) = last_result {
-        return Some(result);
-    }
-    if !delta_text.is_empty() {
-        return Some(delta_text);
-    }
-    None
+    provider_parse::provider_response_text(provider_kind(provider), raw)
 }
 
 fn stream_delta_suffix(buffer: &mut String, candidate: &str) -> String {
-    if candidate.is_empty() {
-        return String::new();
-    }
-
-    let delta = if !buffer.is_empty() && candidate.starts_with(buffer.as_str()) {
-        candidate[buffer.len()..].to_string()
-    } else {
-        candidate.to_string()
-    };
-    buffer.push_str(&delta);
-    delta
+    provider_parse::stream_delta_suffix(buffer, candidate)
 }
 
 fn provider_stream_delta(provider: Provider, line: &str) -> Option<String> {
-    let value = serde_json::from_str::<serde_json::Value>(line.trim()).ok()?;
-    provider_stream_delta_from_value(provider, &value)
-}
-
-fn provider_stream_delta_from_value(
-    provider: Provider,
-    value: &serde_json::Value,
-) -> Option<String> {
-    if value.get("result").is_some() {
-        return None;
-    }
-
-    if provider == Provider::Codex {
-        if let Some(text) = codex_agent_message_text(value) {
-            return Some(text);
-        }
-    }
-
-    for path in [
-        &["delta"][..],
-        &["text"][..],
-        &["content_delta"][..],
-        &["message", "delta"][..],
-        &["message", "text"][..],
-        &["delta", "text"][..],
-        &["event", "delta"][..],
-        &["event", "text"][..],
-        &["output", "text"][..],
-    ] {
-        if let Some(text) = string_at_path(value, path) {
-            return Some(text.to_string());
-        }
-    }
-
-    if let Some(text) = collect_content_text(value.get("content")) {
-        return Some(text);
-    }
-    if let Some(text) = collect_content_text(
-        value
-            .get("message")
-            .and_then(|message| message.get("content")),
-    ) {
-        return Some(text);
-    }
-    if let Some(text) = collect_content_text(value.get("item").and_then(|item| item.get("content")))
-    {
-        return Some(text);
-    }
-
-    None
-}
-
-fn codex_agent_message_text(value: &serde_json::Value) -> Option<String> {
-    let item = value.get("item")?;
-    let item_type = item.get("type").and_then(|value| value.as_str())?;
-
-    match item_type {
-        "agent_message" => {}
-        "message" => {
-            if let Some(role) = item.get("role").and_then(|value| value.as_str()) {
-                if role != "assistant" {
-                    return None;
-                }
-            }
-        }
-        _ => return None,
-    }
-
-    string_at_path(value, &["item", "text"])
-        .map(str::to_string)
-        .or_else(|| collect_content_text(item.get("content")))
-}
-
-fn string_at_path<'a>(value: &'a serde_json::Value, path: &[&str]) -> Option<&'a str> {
-    let mut current = value;
-    for segment in path {
-        current = current.get(*segment)?;
-    }
-    current.as_str().filter(|text| !text.trim().is_empty())
-}
-
-fn collect_content_text(value: Option<&serde_json::Value>) -> Option<String> {
-    let value = value?;
-    match value {
-        serde_json::Value::String(text) if !text.trim().is_empty() => Some(text.to_string()),
-        serde_json::Value::Array(items) => {
-            let text = items
-                .iter()
-                .filter_map(|item| {
-                    item.as_str().map(str::to_string).or_else(|| {
-                        item.get("text")
-                            .and_then(|value| value.as_str())
-                            .map(str::to_string)
-                    })
-                })
-                .collect::<Vec<_>>()
-                .join("");
-            (!text.trim().is_empty()).then_some(text)
-        }
-        serde_json::Value::Object(_) => value
-            .get("text")
-            .and_then(|value| value.as_str())
-            .map(str::to_string),
-        _ => None,
-    }
+    provider_parse::provider_stream_delta(provider_kind(provider), line)
 }
 
 /// Extract a JSON block from text that might contain ```json ... ``` fences.
 fn extract_json_block(text: &str) -> String {
-    let trimmed = text.trim();
-
-    if trimmed.starts_with('{') {
-        if let Some(json_object) = extract_balanced_json_object(trimmed) {
-            return json_object;
-        }
-        return trimmed.to_string();
-    }
-
-    // Look for ```json ... ``` or ``` ... ```
-    if let Some(start) = trimmed.find("```json") {
-        let after_fence = &trimmed[start + 7..];
-        if let Some(end) = after_fence.find("```") {
-            return after_fence[..end].trim().to_string();
-        }
-    }
-    if let Some(start) = trimmed.find("```") {
-        let after_fence = &trimmed[start + 3..];
-        // Skip the optional language identifier on the same line
-        let after_newline = if let Some(nl) = after_fence.find('\n') {
-            &after_fence[nl + 1..]
-        } else {
-            after_fence
-        };
-        if let Some(end) = after_newline.find("```") {
-            return after_newline[..end].trim().to_string();
-        }
-    }
-
-    if let Some(json_object) = extract_balanced_json_object(trimmed) {
-        return json_object;
-    }
-
-    // Last resort: return as-is
-    trimmed.to_string()
-}
-
-fn parse_revision_json(
-    response_text: &str,
-    expected_keys: &[&str],
-) -> Result<serde_json::Value, String> {
-    let block = extract_json_block(response_text);
-
-    if let Ok(value) = serde_json::from_str::<serde_json::Value>(&block) {
-        if value.is_object() && object_has_any_key(&value, expected_keys) {
-            return Ok(value);
-        }
-    }
-
-    if let Some(value) = find_revision_object_in_text(response_text, expected_keys) {
-        return Ok(value);
-    }
-
-    serde_json::from_str::<serde_json::Value>(&block).map_err(|error| error.to_string())
-}
-
-fn object_has_any_key(value: &serde_json::Value, keys: &[&str]) -> bool {
-    match value {
-        serde_json::Value::Object(map) => keys.iter().any(|key| map.contains_key(*key)),
-        _ => false,
-    }
-}
-
-fn find_revision_object_in_text(text: &str, expected_keys: &[&str]) -> Option<serde_json::Value> {
-    let mut cursor = 0usize;
-    while cursor < text.len() {
-        let slice = &text[cursor..];
-        let Some(rel_index) = slice.find('{') else {
-            break;
-        };
-        let start = cursor + rel_index;
-        if let Some(candidate) = extract_balanced_json_object(&text[start..]) {
-            if let Ok(value) = serde_json::from_str::<serde_json::Value>(&candidate) {
-                if value.is_object() && object_has_any_key(&value, expected_keys) {
-                    return Some(value);
-                }
-            }
-            cursor = start + 1;
-        } else {
-            break;
-        }
-    }
-    None
-}
-
-fn extract_balanced_json_object(text: &str) -> Option<String> {
-    for (start, character) in text.char_indices() {
-        if character != '{' {
-            continue;
-        }
-
-        let mut depth = 0usize;
-        let mut in_string = false;
-        let mut escaped = false;
-
-        for (relative_index, current) in text[start..].char_indices() {
-            if in_string {
-                if escaped {
-                    escaped = false;
-                } else if current == '\\' {
-                    escaped = true;
-                } else if current == '"' {
-                    in_string = false;
-                }
-                continue;
-            }
-
-            match current {
-                '"' => in_string = true,
-                '{' => depth += 1,
-                '}' => {
-                    depth = depth.saturating_sub(1);
-                    if depth == 0 {
-                        let end = start + relative_index + current.len_utf8();
-                        return Some(text[start..end].trim().to_string());
-                    }
-                }
-                _ => {}
-            }
-        }
-    }
-
-    None
-}
-
-fn preview_provider_text(text: &str) -> String {
-    let normalized = text.replace('\n', "\\n");
-    let mut chars = normalized.chars();
-    let preview = chars.by_ref().take(220).collect::<String>();
-    if chars.next().is_some() {
-        format!("{preview}...")
-    } else {
-        preview
-    }
+    provider_parse::extract_json_block(text)
 }
 
 #[cfg(test)]
