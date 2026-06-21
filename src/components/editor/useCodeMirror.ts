@@ -380,7 +380,12 @@ export interface VisibleRangeSpec {
 }
 
 interface RevealRangeSpec extends VisibleRangeSpec {
-  kind: "block" | "footnote-definition" | "footnote-reference" | "source-fallback" | "structured-link";
+  kind:
+    | "footnote-definition"
+    | "footnote-reference"
+    | "selection"
+    | "source-fallback"
+    | "structured-link";
 }
 
 export interface ActiveMarkdownLink {
@@ -2330,14 +2335,14 @@ function resolveRevealRangeForPosition(
   if (candidate) {
     return {
       ...candidate,
-      kind: "block",
+      kind: "selection",
     };
   }
 
   const line = state.doc.lineAt(position);
   return {
     from: line.from,
-    kind: "block",
+    kind: "selection",
     to: line.to,
   };
 }
@@ -2389,8 +2394,8 @@ function isMarkdownSyntaxNodeVisible(
       continue;
     }
 
-    if (revealRange.kind === "block") {
-      return true;
+    if (revealRange.kind === "selection") {
+      return false;
     }
 
     if (revealRange.kind === "structured-link") {
