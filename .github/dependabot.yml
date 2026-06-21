@@ -6,17 +6,7 @@ updates:
       interval: weekly
 
   - package-ecosystem: cargo
-    directory: /cli
-    schedule:
-      interval: weekly
-
-  - package-ecosystem: cargo
-    directory: /crates/margent-core
-    schedule:
-      interval: weekly
-
-  - package-ecosystem: cargo
-    directory: /src-tauri
+    directory: /
     schedule:
       interval: weekly
 

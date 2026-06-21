@@ -2335,14 +2335,15 @@ fn reanchor_workspace(
 
     for doc in documents {
         let content = workspace::read_document_content(root, &doc.relative_path)?;
-        let content_hash = workspace::content_hash(&content);
         let heading_index = workspace::extract_heading_index(&content);
+        let reattachment_context =
+            anchor_service::ReattachmentContext::new(&content, &heading_index);
+        let content_hash = reattachment_context.content_hash().to_string();
         let threads = workspace::load_threads_sorted(root, &doc.id)?;
         for mut thread in threads {
             stats.threads += 1;
             let previous_anchor = thread.anchor.clone();
-            let changed =
-                anchor_service::reattach_anchor(&mut thread.anchor, &content, &heading_index);
+            let changed = reattachment_context.reattach_anchor(&mut thread.anchor);
             let reanchor_hash_changed =
                 thread.last_reanchor_content_hash.as_deref() != Some(content_hash.as_str());
 

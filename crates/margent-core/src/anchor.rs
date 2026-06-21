@@ -19,8 +19,44 @@ pub fn reattach_anchor(
     content: &str,
     heading_index: &[HeadingIndexEntry],
 ) -> bool {
+    ReattachmentContext::new(content, heading_index).reattach_anchor(anchor)
+}
+
+pub struct ReattachmentContext<'a> {
+    content: &'a str,
+    content_hash: String,
+    heading_index: &'a [HeadingIndexEntry],
+    blocks: Vec<DocumentBlock>,
+}
+
+impl<'a> ReattachmentContext<'a> {
+    pub fn new(content: &'a str, heading_index: &'a [HeadingIndexEntry]) -> Self {
+        Self {
+            content,
+            content_hash: content_hash(content),
+            heading_index,
+            blocks: collect_blocks(content, heading_index),
+        }
+    }
+
+    pub fn content_hash(&self) -> &str {
+        &self.content_hash
+    }
+
+    pub fn reattach_anchor(&self, anchor: &mut AnchorRecord) -> bool {
+        let outcome = resolve_anchor_with_context(
+            anchor,
+            self.content,
+            self.heading_index,
+            &self.blocks,
+            &self.content_hash,
+        );
+        apply_reattachment_outcome(anchor, outcome)
+    }
+}
+
+fn apply_reattachment_outcome(anchor: &mut AnchorRecord, outcome: ReattachmentOutcome) -> bool {
     let original = anchor.clone();
-    let outcome = resolve_anchor(anchor, content, heading_index);
 
     anchor.state = outcome.state.into();
     anchor.confidence = outcome.confidence;
@@ -37,15 +73,15 @@ pub fn reattach_anchor(
     anchor != &original
 }
 
-fn resolve_anchor(
+fn resolve_anchor_with_context(
     anchor: &AnchorRecord,
     content: &str,
     heading_index: &[HeadingIndexEntry],
+    blocks: &[DocumentBlock],
+    current_content_hash: &str,
 ) -> ReattachmentOutcome {
-    let blocks = collect_blocks(content, heading_index);
-
-    if let Some(range) = exact_range_match(anchor, content, &blocks) {
-        let state = if anchor.base_content_hash == content_hash(content)
+    if let Some(range) = exact_range_match(anchor, content, blocks, current_content_hash) {
+        let state = if anchor.base_content_hash == current_content_hash
             || range.start_offset_utf16 == anchor.start_offset_utf16
         {
             "attached"
@@ -60,15 +96,15 @@ fn resolve_anchor(
         };
     }
 
-    if let Some(outcome) = resolve_footnote_anchor(anchor, content, heading_index, &blocks) {
+    if let Some(outcome) = resolve_footnote_anchor(anchor, content, heading_index, blocks) {
         return outcome;
     }
 
     let exact_quote_matches = collect_quote_matches(&anchor.quote, content);
     let scored = if exact_quote_matches.is_empty() {
-        score_fuzzy_block_candidates(anchor, content, &blocks)
+        score_fuzzy_block_candidates(anchor, content, blocks)
     } else {
-        score_exact_quote_matches(anchor, content, &blocks, exact_quote_matches)
+        score_exact_quote_matches(anchor, content, blocks, exact_quote_matches)
     };
 
     let Some(best) = scored.first() else {
@@ -548,6 +584,7 @@ fn exact_range_match(
     anchor: &AnchorRecord,
     content: &str,
     blocks: &[DocumentBlock],
+    current_content_hash: &str,
 ) -> Option<ResolvedRange> {
     if anchor.start_offset_utf16 >= anchor.end_offset_utf16 {
         return None;
@@ -564,7 +601,7 @@ fn exact_range_match(
     let range =
         range_from_utf16_offsets(content, anchor.start_offset_utf16, anchor.end_offset_utf16);
 
-    if anchor.base_content_hash == content_hash(content) {
+    if anchor.base_content_hash == current_content_hash {
         return Some(range);
     }
 

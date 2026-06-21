@@ -4,98 +4,142 @@ use crate::services::{open_request_service::PendingOpenRequestQueue, workspace_s
 use tauri::State;
 
 #[tauri::command]
-pub fn open_workspace(path: String) -> Result<WorkspaceSnapshot, String> {
-    workspace_service::open_workspace(&path)
+pub async fn open_workspace(path: String) -> Result<WorkspaceSnapshot, String> {
+    super::run_blocking("open workspace", move || {
+        workspace_service::open_workspace(&path)
+    })
+    .await
 }
 
 #[tauri::command]
-pub fn list_review_passes(
+pub async fn list_review_passes(
     workspace_root: String,
 ) -> Result<Vec<margent_core::review_context::ReviewPassSummary>, String> {
-    margent_core::review_context::list_review_passes(std::path::Path::new(&workspace_root))
+    super::run_blocking("list review passes", move || {
+        margent_core::review_context::list_review_passes(std::path::Path::new(&workspace_root))
+    })
+    .await
 }
 
 #[tauri::command]
-pub fn read_document(
+pub async fn read_document(
     workspace_root: String,
     relative_path: String,
 ) -> Result<DocumentPayload, String> {
-    workspace_service::read_document(&workspace_root, &relative_path)
+    super::run_blocking("read document", move || {
+        workspace_service::read_document(&workspace_root, &relative_path)
+    })
+    .await
 }
 
 #[tauri::command]
-pub fn create_markdown_file(
+pub async fn create_markdown_file(
     workspace_root: String,
     relative_path: String,
     content: Option<String>,
 ) -> Result<DocumentPayload, String> {
-    workspace_service::create_markdown_file(&workspace_root, &relative_path, content.as_deref())
+    super::run_blocking("create markdown file", move || {
+        workspace_service::create_markdown_file(&workspace_root, &relative_path, content.as_deref())
+    })
+    .await
 }
 
 #[tauri::command]
-pub fn rename_markdown_file(
+pub async fn rename_markdown_file(
     workspace_root: String,
     from_relative_path: String,
     to_relative_path: String,
 ) -> Result<DocumentPayload, String> {
-    workspace_service::rename_markdown_file(&workspace_root, &from_relative_path, &to_relative_path)
+    super::run_blocking("rename markdown file", move || {
+        workspace_service::rename_markdown_file(
+            &workspace_root,
+            &from_relative_path,
+            &to_relative_path,
+        )
+    })
+    .await
 }
 
 #[tauri::command]
-pub fn delete_markdown_file(
+pub async fn delete_markdown_file(
     workspace_root: String,
     relative_path: String,
 ) -> Result<WorkspaceSnapshot, String> {
-    workspace_service::delete_markdown_file(&workspace_root, &relative_path)
+    super::run_blocking("delete markdown file", move || {
+        workspace_service::delete_markdown_file(&workspace_root, &relative_path)
+    })
+    .await
 }
 
 #[tauri::command]
-pub fn reveal_markdown_file(workspace_root: String, relative_path: String) -> Result<(), String> {
-    workspace_service::reveal_markdown_file(&workspace_root, &relative_path)
+pub async fn reveal_markdown_file(
+    workspace_root: String,
+    relative_path: String,
+) -> Result<(), String> {
+    super::run_blocking("reveal markdown file", move || {
+        workspace_service::reveal_markdown_file(&workspace_root, &relative_path)
+    })
+    .await
 }
 
 #[tauri::command]
-pub fn check_document_update(
+pub async fn check_document_update(
     workspace_root: String,
     relative_path: String,
     known_content_hash: String,
 ) -> Result<Option<DocumentPayload>, String> {
-    workspace_service::check_document_update(&workspace_root, &relative_path, &known_content_hash)
+    super::run_blocking("check document update", move || {
+        workspace_service::check_document_update(
+            &workspace_root,
+            &relative_path,
+            &known_content_hash,
+        )
+    })
+    .await
 }
 
 #[tauri::command]
-pub fn save_document(
+pub async fn save_document(
     workspace_root: String,
     relative_path: String,
     content: String,
 ) -> Result<DocumentPayload, String> {
-    workspace_service::save_document(&workspace_root, &relative_path, &content)
+    super::run_blocking("save document", move || {
+        workspace_service::save_document(&workspace_root, &relative_path, &content)
+    })
+    .await
 }
 
 #[tauri::command]
-pub fn save_document_if_current(
+pub async fn save_document_if_current(
     workspace_root: String,
     relative_path: String,
     content: String,
     expected_version: DocumentVersion,
     operation_id: String,
 ) -> Result<SaveDocumentIfCurrentResult, String> {
-    workspace_service::save_document_if_current(
-        &workspace_root,
-        &relative_path,
-        &content,
-        &expected_version,
-        &operation_id,
-    )
+    super::run_blocking("save document if current", move || {
+        workspace_service::save_document_if_current(
+            &workspace_root,
+            &relative_path,
+            &content,
+            &expected_version,
+            &operation_id,
+        )
+    })
+    .await
 }
 
 #[tauri::command]
-pub fn import_asset(
+pub async fn import_asset(
     workspace_root: String,
     suggested_name: String,
     bytes: Vec<u8>,
 ) -> Result<crate::models::workspace::AssetImportResult, String> {
-    workspace_service::import_asset(&workspace_root, &suggested_name, bytes)
+    super::run_blocking("import asset", move || {
+        workspace_service::import_asset(&workspace_root, &suggested_name, bytes)
+    })
+    .await
 }
 
 #[tauri::command]

@@ -529,6 +529,10 @@ fn load_document_context(
     document_id: &str,
     document_relative_path: Option<&str>,
 ) -> Result<(DocumentRecord, PathBuf, String), String> {
+    if let Some(record) = file_service::read_document_record_by_id(workspace_root, document_id)? {
+        return read_document_context_for_record(workspace_root, record);
+    }
+
     let mdreview_path = file_service::ensure_workspace_layout(workspace_root)?;
     let documents_dir = mdreview_path.join("documents");
     let mut fallback_by_relative_path = None;
@@ -548,10 +552,6 @@ fn load_document_context(
         else {
             continue;
         };
-
-        if record.id == document_id {
-            return read_document_context_for_record(workspace_root, record);
-        }
 
         if document_relative_path == Some(record.relative_path.as_str()) {
             fallback_by_relative_path = Some(record);

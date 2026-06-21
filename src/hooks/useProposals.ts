@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { invokeBackend } from "../lib/backend";
 import { getErrorMessage } from "../lib/errorMessage";
 import type { ProposalMutationResult, ProposalRecord } from "../types/proposal";
@@ -40,10 +40,10 @@ export function useProposals({
     workspace?.rootPath,
   ]);
 
-  async function loadProposals(
+  const loadProposals = useCallback(async (
     workspaceRoot = workspace?.rootPath,
     documentId = activeDocument?.id,
-  ) {
+  ) => {
     if (!workspaceRoot || !documentId) {
       return;
     }
@@ -62,9 +62,9 @@ export function useProposals({
     } finally {
       setIsLoading(false);
     }
-  }
+  }, [activeDocument?.id, workspace?.rootPath]);
 
-  async function acceptProposal(proposalId: string, updatedDocumentText?: string) {
+  const acceptProposal = useCallback(async (proposalId: string, updatedDocumentText?: string) => {
     if (!workspace) {
       return;
     }
@@ -94,9 +94,9 @@ export function useProposals({
       setActiveActionKind(null);
       setActiveActionProposalId(null);
     }
-  }
+  }, [onDocumentApplied, workspace]);
 
-  async function rejectProposal(proposalId: string) {
+  const rejectProposal = useCallback(async (proposalId: string) => {
     if (!workspace) {
       return;
     }
@@ -121,26 +121,39 @@ export function useProposals({
       setActiveActionKind(null);
       setActiveActionProposalId(null);
     }
-  }
+  }, [workspace]);
 
-  function upsertProposal(proposal: ProposalRecord) {
+  const upsertProposal = useCallback((proposal: ProposalRecord) => {
     setProposals((current) =>
       sortProposals([proposal, ...current.filter((entry) => entry.id !== proposal.id)]),
     );
-  }
+  }, []);
 
-  return {
-    acceptProposal,
-    activeActionKind,
-    activeActionProposalId,
-    errorMessage,
-    isLoading,
-    loadProposals,
-    proposals,
-    rejectProposal,
-    setErrorMessage,
-    upsertProposal,
-  };
+  return useMemo(
+    () => ({
+      acceptProposal,
+      activeActionKind,
+      activeActionProposalId,
+      errorMessage,
+      isLoading,
+      loadProposals,
+      proposals,
+      rejectProposal,
+      setErrorMessage,
+      upsertProposal,
+    }),
+    [
+      acceptProposal,
+      activeActionKind,
+      activeActionProposalId,
+      errorMessage,
+      isLoading,
+      loadProposals,
+      proposals,
+      rejectProposal,
+      upsertProposal,
+    ],
+  );
 }
 
 function sortProposals(proposals: ProposalRecord[]) {

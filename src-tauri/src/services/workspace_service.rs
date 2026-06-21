@@ -1,6 +1,7 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+#[cfg(not(test))]
 use std::thread;
 #[cfg(debug_assertions)]
 use std::time::Instant;
@@ -16,6 +17,8 @@ use crate::models::thread::ThreadRecord;
 use crate::models::workspace::{AssetImportResult, WorkspaceRecord, WorkspaceSnapshot};
 
 use super::{file_service, thread_service};
+
+const MAX_SNAPSHOTS_PER_DOCUMENT: usize = 50;
 
 #[cfg(debug_assertions)]
 struct DebugTiming {
@@ -256,7 +259,42 @@ pub fn snapshot_document(
         .join("snapshots")
         .join(format!("{snapshot_id}.json"));
     file_service::write_json_atomic(&snapshot_path, &record)?;
+    prune_document_snapshots(&mdreview_path, &document.id)?;
     Ok(record)
+}
+
+fn prune_document_snapshots(mdreview_path: &Path, document_id: &str) -> Result<(), String> {
+    let snapshots_dir = mdreview_path.join("snapshots");
+    let mut snapshots = Vec::new();
+
+    for entry in fs::read_dir(&snapshots_dir)
+        .map_err(|error| format!("Unable to read {}: {error}", snapshots_dir.display()))?
+    {
+        let entry =
+            entry.map_err(|error| format!("Unable to inspect snapshot records: {error}"))?;
+        let path = entry.path();
+        if !path.is_file() {
+            continue;
+        }
+
+        let Some(snapshot) =
+            file_service::read_scanned_json::<DocumentSnapshotRecord>(&path, "snapshot")?
+        else {
+            continue;
+        };
+
+        if snapshot.document_id == document_id {
+            snapshots.push((snapshot.created_at, snapshot.id, path));
+        }
+    }
+
+    snapshots.sort_by(|left, right| right.0.cmp(&left.0).then_with(|| right.1.cmp(&left.1)));
+
+    for (_, _, path) in snapshots.into_iter().skip(MAX_SNAPSHOTS_PER_DOCUMENT) {
+        remove_file_if_exists(&path)?;
+    }
+
+    Ok(())
 }
 
 pub fn reveal_markdown_file(workspace_root: &str, relative_path: &str) -> Result<(), String> {
@@ -390,36 +428,45 @@ fn schedule_document_thread_reattach(
     document_record: DocumentRecord,
     content: String,
 ) {
-    let document_id = document_record.id.clone();
-    #[cfg(debug_assertions)]
-    let spawned_document_id = document_id.clone();
-    let thread_name = format!("margent-reattach-{document_id}");
-    if let Err(error) = thread::Builder::new().name(thread_name).spawn(move || {
+    #[cfg(test)]
+    {
+        let _ = reattach_document_threads_if_current(&root_path, &document_record, &content);
+    }
+
+    #[cfg(not(test))]
+    {
+        let document_id = document_record.id.clone();
         #[cfg(debug_assertions)]
-        let start = Instant::now();
-        let result = reattach_document_threads_if_current(&root_path, &document_record, &content);
-        #[cfg(debug_assertions)]
-        match result {
-            Ok(()) => eprintln!(
+        let spawned_document_id = document_id.clone();
+        let thread_name = format!("margent-reattach-{document_id}");
+        if let Err(error) = thread::Builder::new().name(thread_name).spawn(move || {
+            #[cfg(debug_assertions)]
+            let start = Instant::now();
+            let result =
+                reattach_document_threads_if_current(&root_path, &document_record, &content);
+            #[cfg(debug_assertions)]
+            match result {
+                Ok(()) => eprintln!(
                 "[margent timing] deferred reattach_document_threads: document={}, elapsed={:.1}ms",
                 spawned_document_id,
                 start.elapsed().as_secs_f64() * 1000.0
             ),
-            Err(error) => eprintln!(
+                Err(error) => eprintln!(
                 "[margent timing] deferred reattach_document_threads failed: document={}, error={}",
                 spawned_document_id, error
             ),
-        }
-        #[cfg(not(debug_assertions))]
-        let _ = result;
-    }) {
-        #[cfg(debug_assertions)]
-        eprintln!(
+            }
+            #[cfg(not(debug_assertions))]
+            let _ = result;
+        }) {
+            #[cfg(debug_assertions)]
+            eprintln!(
             "[margent timing] deferred reattach_document_threads spawn failed: document={}, error={}",
             document_id, error
         );
-        #[cfg(not(debug_assertions))]
-        let _ = error;
+            #[cfg(not(debug_assertions))]
+            let _ = error;
+        }
     }
 }
 
@@ -466,7 +513,7 @@ pub fn save_document_if_current(
     file_service::write_string_atomic(&document_path, content)?;
     let version = document_version_for_path_and_content(&document_path, content)?;
     let record = upsert_document_record(root_path, relative_path, content)?;
-    thread_service::reattach_document_threads(root_path, &record, content)?;
+    schedule_document_thread_reattach(root_path.to_path_buf(), record.clone(), content.to_string());
 
     Ok(SaveDocumentIfCurrentResult::Saved {
         document: Box::new(record.into_payload(
@@ -722,11 +769,7 @@ fn read_document_record(
     root_path: &Path,
     document_id: &str,
 ) -> Result<Option<DocumentRecord>, String> {
-    let mdreview_path = file_service::ensure_workspace_layout(root_path)?;
-    let record_path = mdreview_path
-        .join("documents")
-        .join(format!("{document_id}.json"));
-    file_service::read_optional_json::<DocumentRecord>(&record_path)
+    file_service::read_document_record_by_id(root_path, document_id)
 }
 
 fn remove_document_record(root_path: &Path, document_id: &str) -> Result<(), String> {
@@ -1223,6 +1266,37 @@ mod tests {
             fs::read(workspace_root.join(&second.relative_path)).expect("read second"),
             vec![4, 5, 6]
         );
+
+        fs::remove_dir_all(&workspace_root).expect("cleanup temp workspace");
+    }
+
+    #[test]
+    fn snapshot_document_prunes_old_document_snapshots() {
+        let workspace_root = unique_temp_dir("margent-snapshot-retention");
+        fs::create_dir_all(&workspace_root).expect("create temp workspace");
+        fs::write(workspace_root.join("draft.md"), "Alpha beta\n").expect("write document");
+        let workspace =
+            open_workspace(workspace_root.to_str().expect("root str")).expect("open workspace");
+        let document = workspace.documents.first().expect("document");
+
+        for index in 0..(MAX_SNAPSHOTS_PER_DOCUMENT + 5) {
+            snapshot_document(
+                &workspace_root,
+                document,
+                &format!("Snapshot {index}\n"),
+                "test",
+                None,
+            )
+            .expect("snapshot document");
+        }
+
+        let snapshots_dir = workspace_root.join(".mdreview").join("snapshots");
+        let snapshot_count = fs::read_dir(&snapshots_dir)
+            .expect("read snapshots")
+            .filter_map(Result::ok)
+            .filter(|entry| entry.path().is_file())
+            .count();
+        assert_eq!(snapshot_count, MAX_SNAPSHOTS_PER_DOCUMENT);
 
         fs::remove_dir_all(&workspace_root).expect("cleanup temp workspace");
     }

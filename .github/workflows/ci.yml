@@ -31,6 +31,9 @@ jobs:
         with:
           components: clippy, rustfmt
 
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+
       - name: Install frontend dependencies
         run: npm ci
 
@@ -40,29 +43,11 @@ jobs:
       - name: Run frontend tests
         run: npm test
 
-      - name: Run core tests
-        run: cargo test --manifest-path crates/margent-core/Cargo.toml
+      - name: Check Rust formatting
+        run: cargo fmt --all --check
 
-      - name: Check core formatting
-        run: cargo fmt --manifest-path crates/margent-core/Cargo.toml --check
+      - name: Run Rust tests
+        run: cargo test --workspace --locked
 
-      - name: Lint core crate
-        run: cargo clippy --manifest-path crates/margent-core/Cargo.toml --all-targets -- -D warnings
-
-      - name: Run CLI tests
-        run: cargo test --manifest-path cli/Cargo.toml
-
-      - name: Check CLI formatting
-        run: cargo fmt --manifest-path cli/Cargo.toml --check
-
-      - name: Lint CLI crate
-        run: cargo clippy --manifest-path cli/Cargo.toml --all-targets -- -D warnings
-
-      - name: Run Tauri tests
-        run: cargo test --manifest-path src-tauri/Cargo.toml
-
-      - name: Check Tauri formatting
-        run: cargo fmt --manifest-path src-tauri/Cargo.toml --check
-
-      - name: Lint Tauri crate
-        run: cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
+      - name: Lint Rust workspace
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings

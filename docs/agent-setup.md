@@ -24,13 +24,13 @@ git clone https://github.com/Brehove/margent.git
 cd margent
 npm ci
 npm run build
-cargo test --manifest-path cli/Cargo.toml
+cargo test --workspace --locked
 cargo install --locked --path cli
 margent install --agent-skills
 osascript -e 'quit app "Margent"' 2>/dev/null || true
 npm run tauri build
 mkdir -p ~/Applications
-ditto src-tauri/target/release/bundle/macos/Margent.app ~/Applications/Margent.app
+ditto target/release/bundle/macos/Margent.app ~/Applications/Margent.app
 open ~/Applications/Margent.app
 claude auth login
 ```
@@ -72,9 +72,9 @@ copy.
    npm ci
    npm run build
    npm test
-   cargo test --manifest-path crates/margent-core/Cargo.toml
-   cargo test --manifest-path cli/Cargo.toml
-   cargo test --manifest-path src-tauri/Cargo.toml
+   cargo test --workspace --locked
+   cargo clippy --workspace --all-targets --locked -- -D warnings
+   cargo fmt --all --check
    ```
 
 5. Install the Margent CLI and shared agent skill:
@@ -96,7 +96,7 @@ copy.
    osascript -e 'quit app "Margent"' 2>/dev/null || true
    npm run tauri build
    mkdir -p ~/Applications
-   ditto src-tauri/target/release/bundle/macos/Margent.app ~/Applications/Margent.app
+   ditto target/release/bundle/macos/Margent.app ~/Applications/Margent.app
    open ~/Applications/Margent.app
    ```
 

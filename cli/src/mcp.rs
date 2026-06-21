@@ -1073,14 +1073,9 @@ fn proposal_id_tool_schema(name: &str, title: &str, description: &str) -> Value 
 mod tests {
     use super::*;
     use std::fs;
-    use std::time::{SystemTime, UNIX_EPOCH};
 
     fn temp_root(label: &str) -> PathBuf {
-        let nonce = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .expect("system time")
-            .as_nanos();
-        env::temp_dir().join(format!("margent-mcp-{label}-{nonce}"))
+        env::temp_dir().join(margent_core::id::new_id(&format!("margent_mcp_{label}")))
     }
 
     fn setup_workspace() -> (PathBuf, McpServer) {

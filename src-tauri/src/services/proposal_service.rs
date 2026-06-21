@@ -318,7 +318,7 @@ pub fn accept_proposal(
         .ok_or_else(|| {
             "Only updated-document proposals can be accepted in the current release.".to_string()
         })?;
-    workspace_service::snapshot_document(
+    let snapshot = workspace_service::snapshot_document(
         root_path,
         &document_record,
         &current_document_text,
@@ -364,7 +364,7 @@ pub fn accept_proposal(
     Ok(ProposalMutationResult {
         proposal: compact_terminal_proposal_for_response(proposal),
         document: Some(document),
-        snapshot: None,
+        snapshot: Some(snapshot),
         message: None,
     })
 }
@@ -1098,28 +1098,7 @@ fn load_document_context(
     workspace_root: &Path,
     document_id: &str,
 ) -> Result<(DocumentRecord, PathBuf, String), String> {
-    let mdreview_path = file_service::ensure_workspace_layout(workspace_root)?;
-    let documents_dir = mdreview_path.join("documents");
-
-    for entry in fs::read_dir(&documents_dir)
-        .map_err(|error| format!("Unable to read {}: {error}", documents_dir.display()))?
-    {
-        let entry =
-            entry.map_err(|error| format!("Unable to inspect document records: {error}"))?;
-        let path = entry.path();
-
-        if !path.is_file() {
-            continue;
-        }
-
-        let Some(record) = read_scanned_sidecar::<DocumentRecord>(&path, "document")? else {
-            continue;
-        };
-
-        if record.id != document_id {
-            continue;
-        }
-
+    if let Some(record) = file_service::read_document_record_by_id(workspace_root, document_id)? {
         let document_path =
             file_service::resolve_document_path(workspace_root, &record.relative_path)?;
         let content = fs::read_to_string(&document_path)
@@ -1518,7 +1497,10 @@ printf '%s' '{"status":"ok","responseMode":"updated_document","assistantMessage"
             result.proposal.resolve_thread_ids,
             vec![thread.id.clone(), "thread_missing".into()]
         );
-        assert!(result.snapshot.is_none());
+        let snapshot = result.snapshot.as_ref().expect("accept returns snapshot");
+        assert_eq!(snapshot.document_id, document.id);
+        assert_eq!(snapshot.relative_path, "draft.md");
+        assert_eq!(snapshot.reason, "proposal.accept");
         assert_eq!(
             result
                 .document
@@ -1664,7 +1646,7 @@ printf '%s' '{"status":"ok","responseMode":"updated_document","assistantMessage"
 
         assert_eq!(applied_hunk_ids, selected_hunk_ids);
         assert_eq!(result.proposal.status, "accepted");
-        assert!(result.snapshot.is_none());
+        assert!(result.snapshot.is_some());
         assert_eq!(
             fs::read_dir(workspace_root.join(".mdreview").join("snapshots"))
                 .expect("read snapshots")

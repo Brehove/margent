@@ -37,14 +37,17 @@ jobs:
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@stable
 
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+
       - name: Install frontend dependencies
         run: npm ci
 
       - name: Build CLI archive
         run: |
-          cargo build --manifest-path cli/Cargo.toml --release --locked
+          cargo build --release --locked -p margent-cli --bin margent
           mkdir -p dist/cli
-          cp cli/target/release/margent dist/cli/margent
+          cp target/release/margent dist/cli/margent
           tar -czf "$CLI_ARCHIVE" -C dist/cli margent
           shasum -a 256 "$CLI_ARCHIVE" > "$CLI_ARCHIVE.sha256"
 

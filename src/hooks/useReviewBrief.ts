@@ -8,6 +8,7 @@ import type { DocumentPayload, DocumentSummary, WorkspaceSnapshot } from "../typ
 
 interface UseReviewBriefOptions {
   activeDocument: DocumentPayload | null;
+  enabled?: boolean;
   onActiveDocumentApplied?: (document: DocumentPayload) => void;
   onActiveThreadUpdated?: (thread: ThreadRecord) => void;
   workspace: WorkspaceSnapshot | null;
@@ -17,6 +18,7 @@ type BriefActionKind = "accept" | "reject" | "reply" | null;
 
 export function useReviewBrief({
   activeDocument,
+  enabled = true,
   onActiveDocumentApplied,
   onActiveThreadUpdated,
   workspace,
@@ -67,10 +69,53 @@ export function useReviewBrief({
   }, [workspaceRoot]);
 
   useEffect(() => {
-    void loadBrief();
-  }, [loadBrief]);
+    if (!enabled) {
+      return;
+    }
 
-  async function acceptProposal(proposalId: string, updatedDocumentText?: string) {
+    void loadBrief();
+  }, [enabled, loadBrief]);
+
+  const upsertBriefProposal = useCallback((proposal: ProposalRecord) => {
+    setProposals((current) =>
+      sortByUpdatedAt([proposal, ...current.filter((entry) => entry.id !== proposal.id)]),
+    );
+  }, []);
+
+  const upsertBriefThread = useCallback((thread: ThreadRecord) => {
+    setThreads((current) =>
+      sortByUpdatedAt([thread, ...current.filter((entry) => entry.id !== thread.id)]),
+    );
+  }, []);
+
+  const refreshBriefThreads = useCallback(
+    async (threadIds: string[]) => {
+      if (!workspaceRoot || threadIds.length === 0) {
+        return;
+      }
+
+      const uniqueThreadIds = [...new Set(threadIds)];
+      const refreshedThreads = await Promise.all(
+        uniqueThreadIds.map((threadId) =>
+          invokeBackend<ThreadRecord>("load_thread", {
+            threadId,
+            workspaceRoot,
+          }),
+        ),
+      );
+
+      setThreads((current) => {
+        const refreshedById = new Map(refreshedThreads.map((thread) => [thread.id, thread]));
+        return sortByUpdatedAt([
+          ...refreshedThreads,
+          ...current.filter((thread) => !refreshedById.has(thread.id)),
+        ]);
+      });
+    },
+    [workspaceRoot],
+  );
+
+  const acceptProposal = useCallback(async (proposalId: string, updatedDocumentText?: string) => {
     if (!workspace) {
       return;
     }
@@ -85,22 +130,32 @@ export function useReviewBrief({
         updatedDocumentText,
         workspaceRoot: workspace.rootPath,
       });
+      upsertBriefProposal(result.proposal);
       if (result.document && result.document.id === activeDocument?.id) {
         onActiveDocumentApplied?.(result.document);
       }
       if (result.message) {
         setErrorMessage(result.message);
       }
-      await loadBrief();
+      await refreshBriefThreads([
+        ...result.proposal.threadIds,
+        ...result.proposal.resolveThreadIds,
+      ]);
     } catch (error) {
       setErrorMessage(getErrorMessage(error, "Unable to accept the selected proposal."));
     } finally {
       setActiveActionId(null);
       setActiveActionKind(null);
     }
-  }
+  }, [
+    activeDocument?.id,
+    onActiveDocumentApplied,
+    refreshBriefThreads,
+    upsertBriefProposal,
+    workspace,
+  ]);
 
-  async function rejectProposal(proposalId: string) {
+  const rejectProposal = useCallback(async (proposalId: string) => {
     if (!workspace) {
       return;
     }
@@ -117,16 +172,16 @@ export function useReviewBrief({
       if (result.message) {
         setErrorMessage(result.message);
       }
-      await loadBrief();
+      upsertBriefProposal(result.proposal);
     } catch (error) {
       setErrorMessage(getErrorMessage(error, "Unable to reject the selected proposal."));
     } finally {
       setActiveActionId(null);
       setActiveActionKind(null);
     }
-  }
+  }, [upsertBriefProposal, workspace]);
 
-  async function replyToThread(threadId: string, body: string) {
+  const replyToThread = useCallback(async (threadId: string, body: string) => {
     if (!workspace) {
       return;
     }
@@ -150,27 +205,41 @@ export function useReviewBrief({
       if (thread.documentId === activeDocument?.id) {
         onActiveThreadUpdated?.(thread);
       }
-      await loadBrief();
+      upsertBriefThread(thread);
     } catch (error) {
       setErrorMessage(getErrorMessage(error, "Unable to reply to the selected thread."));
     } finally {
       setActiveActionId(null);
       setActiveActionKind(null);
     }
-  }
+  }, [activeDocument?.id, onActiveThreadUpdated, upsertBriefThread, workspace]);
 
-  return {
-    acceptProposal,
-    activeActionId,
-    activeActionKind,
-    entries,
-    errorMessage,
-    isLoading,
-    loadBrief,
-    rejectProposal,
-    replyToThread,
-    resolvedCount,
-  };
+  return useMemo(
+    () => ({
+      acceptProposal,
+      activeActionId,
+      activeActionKind,
+      entries,
+      errorMessage,
+      isLoading,
+      loadBrief,
+      rejectProposal,
+      replyToThread,
+      resolvedCount,
+    }),
+    [
+      acceptProposal,
+      activeActionId,
+      activeActionKind,
+      entries,
+      errorMessage,
+      isLoading,
+      loadBrief,
+      rejectProposal,
+      replyToThread,
+      resolvedCount,
+    ],
+  );
 }
 
 export function buildReviewBriefEntries(
@@ -263,4 +332,12 @@ function excerpt(value: string, limit = 220) {
   }
 
   return `${normalized.slice(0, limit - 3)}...`;
+}
+
+function sortByUpdatedAt<T extends { createdAt: string; updatedAt: string }>(records: T[]) {
+  return [...records].sort((left, right) => {
+    const rightTimestamp = right.updatedAt || right.createdAt;
+    const leftTimestamp = left.updatedAt || left.createdAt;
+    return rightTimestamp.localeCompare(leftTimestamp);
+  });
 }

@@ -4,7 +4,7 @@ import {
   isTauri,
 } from "@tauri-apps/api/core";
 import { listen as tauriListen, type Event as TauriEvent } from "@tauri-apps/api/event";
-import { open as tauriOpen, type OpenDialogOptions } from "@tauri-apps/plugin-dialog";
+import type { OpenDialogOptions } from "@tauri-apps/plugin-dialog";
 import { watch as tauriWatch, type WatchEvent } from "@tauri-apps/plugin-fs";
 import type { ProposalMutationResult } from "../types/proposal";
 import type { ProjectSearchMode, ProjectSearchResponse } from "../types/search";
@@ -73,7 +73,8 @@ export async function watchBackend(
 
 export async function openBackend(options?: OpenDialogOptions) {
   if (isTauri()) {
-    return tauriOpen(options);
+    const { open } = await import("@tauri-apps/plugin-dialog");
+    return open(options);
   }
 
   return null;
