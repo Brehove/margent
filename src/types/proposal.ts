@@ -1,4 +1,7 @@
 import type { DocumentPayload, DocumentVersion } from "./workspace";
+import type { DocumentSnapshotRecord } from "./snapshot";
+
+export type { DocumentSnapshotRecord } from "./snapshot";
 
 export interface AdapterDefinition {
   id: string;
@@ -33,17 +36,6 @@ export interface ProposalRecord {
   resolveThreadIds: string[];
   stderr: string | null;
   errorMessage: string | null;
-}
-
-export interface DocumentSnapshotRecord {
-  id: string;
-  documentId: string;
-  relativePath: string;
-  contentHash: string;
-  content: string;
-  createdAt: string;
-  reason: string;
-  proposalId: string | null;
 }
 
 export interface TextRange {

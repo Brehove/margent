@@ -143,6 +143,9 @@ async function webInvoke<T>(command: string, args: InvokeArgs): Promise<T> {
     case "get_proposal_change_set":
     case "accept_proposal_hunks":
       throw new Error("Inline proposal hunk review is only available in the Margent desktop app.");
+    case "list_document_snapshots":
+    case "revert_latest_snapshot":
+      throw new Error("Snapshot recovery is only available in the Margent desktop app.");
     default:
       throw new Error(`${command} is only available in the Margent desktop app.`);
   }

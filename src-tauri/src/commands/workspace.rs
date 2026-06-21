@@ -1,4 +1,5 @@
 use crate::models::document::{DocumentPayload, DocumentVersion, SaveDocumentIfCurrentResult};
+use crate::models::snapshot::{DocumentSnapshotRecord, DocumentSnapshotRevertResult};
 use crate::models::workspace::{WorkspaceOpenRequest, WorkspaceSnapshot};
 use crate::services::{open_request_service::PendingOpenRequestQueue, workspace_service};
 use tauri::State;
@@ -67,6 +68,28 @@ pub async fn delete_markdown_file(
 ) -> Result<WorkspaceSnapshot, String> {
     super::run_blocking("delete markdown file", move || {
         workspace_service::delete_markdown_file(&workspace_root, &relative_path)
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn list_document_snapshots(
+    workspace_root: String,
+    relative_path: Option<String>,
+) -> Result<Vec<DocumentSnapshotRecord>, String> {
+    super::run_blocking("list document snapshots", move || {
+        workspace_service::list_document_snapshots(&workspace_root, relative_path.as_deref())
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn revert_latest_snapshot(
+    workspace_root: String,
+    relative_path: Option<String>,
+) -> Result<DocumentSnapshotRevertResult, String> {
+    super::run_blocking("revert latest snapshot", move || {
+        workspace_service::revert_latest_snapshot(&workspace_root, relative_path.as_deref())
     })
     .await
 }

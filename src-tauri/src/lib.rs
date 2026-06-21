@@ -24,6 +24,7 @@ const MENU_QUICK_OPEN: &str = "margent.quick-open";
 const MENU_RAW_MODE: &str = "margent.mode-raw";
 const MENU_RENAME_ACTIVE_FILE: &str = "margent.rename-active-file";
 const MENU_RENDERED_MODE: &str = "margent.mode-rendered";
+const MENU_REVERT_LAST_SNAPSHOT: &str = "margent.revert-last-snapshot";
 const MENU_REVEAL_ACTIVE_FILE: &str = "margent.reveal-active-file";
 const MENU_REVIEW_BRIEF: &str = "margent.review-brief";
 const MENU_SAVE: &str = "margent.save";
@@ -80,6 +81,8 @@ pub fn run() {
             commands::workspace::create_markdown_file,
             commands::workspace::rename_markdown_file,
             commands::workspace::delete_markdown_file,
+            commands::workspace::list_document_snapshots,
+            commands::workspace::revert_latest_snapshot,
             commands::workspace::reveal_markdown_file,
             commands::workspace::check_document_update,
             commands::workspace::save_document,
@@ -173,6 +176,8 @@ fn build_app_menu<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> tauri::Result
     let save = MenuItemBuilder::with_id(MENU_SAVE, "Save Draft")
         .accelerator("CmdOrCtrl+S")
         .build(app)?;
+    let revert_last_snapshot =
+        MenuItemBuilder::with_id(MENU_REVERT_LAST_SNAPSHOT, "Revert Last Snapshot").build(app)?;
     let rename_active_file =
         MenuItemBuilder::with_id(MENU_RENAME_ACTIVE_FILE, "Rename Active File...").build(app)?;
     let reveal_active_file =
@@ -227,6 +232,7 @@ fn build_app_menu<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> tauri::Result
         .item(&open_file)
         .item(&open_recent)
         .item(&save)
+        .item(&revert_last_snapshot)
         .separator()
         .item(&rename_active_file)
         .item(&reveal_active_file)

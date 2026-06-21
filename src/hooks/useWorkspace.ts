@@ -13,6 +13,7 @@ import { useWorkspaceStore } from "../stores/workspaceStore";
 import type {
   AssetImportResult,
   DocumentPayload,
+  DocumentSnapshotRevertResult,
   SaveConflict,
   SaveDocumentIfCurrentResult,
   WorkspaceOpenRequest,
@@ -865,6 +866,44 @@ export async function revealMarkdownFile(relativePath: string) {
     });
   } catch (error) {
     store.setErrorMessage(getErrorMessage(error, "Unable to reveal the Markdown file."));
+  }
+}
+
+export async function revertLatestSnapshotForActiveDocument() {
+  const latest = useWorkspaceStore.getState();
+  const { activeDocument, workspace } = latest;
+
+  if (!workspace || !activeDocument || latest.isSaving) {
+    return;
+  }
+
+  if (latest.isEditorDirty) {
+    latest.setErrorMessage("Save the active draft before reverting to a snapshot.");
+    return;
+  }
+
+  latest.setIsSaving(true);
+  latest.setErrorMessage(null);
+  latest.setPendingExternalDocument(null);
+  latest.setSaveConflict(null);
+
+  try {
+    const result = await invokeBackend<DocumentSnapshotRevertResult>("revert_latest_snapshot", {
+      relativePath: activeDocument.relativePath,
+      workspaceRoot: workspace.rootPath,
+    });
+
+    if (!isStillActiveDocument(workspace.rootPath, activeDocument.relativePath)) {
+      return;
+    }
+
+    applyDocumentPayload(result.document);
+  } catch (error) {
+    useWorkspaceStore
+      .getState()
+      .setErrorMessage(getErrorMessage(error, "Unable to revert the active document."));
+  } finally {
+    useWorkspaceStore.getState().setIsSaving(false);
   }
 }
 

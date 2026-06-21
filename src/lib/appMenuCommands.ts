@@ -19,6 +19,7 @@ export const APP_MENU_COMMANDS = {
   rawMode: "margent.mode-raw",
   renameActiveFile: "margent.rename-active-file",
   renderedMode: "margent.mode-rendered",
+  revertLastSnapshot: "margent.revert-last-snapshot",
   revealActiveFile: "margent.reveal-active-file",
   reviewBrief: "margent.review-brief",
   save: "margent.save",
