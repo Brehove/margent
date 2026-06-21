@@ -7,7 +7,7 @@ import {
   syntaxTree,
   syntaxHighlighting,
 } from "@codemirror/language";
-import TurndownService from "turndown";
+import type TurndownService from "turndown";
 import {
   Compartment,
   EditorSelection,
@@ -3921,14 +3921,21 @@ export function useCodeMirror({
                 return false;
               }
 
-              const plainText = event.clipboardData?.getData("text/plain") ?? "";
-              const markdownText = convertClipboardHtmlToMarkdown(html, plainText);
-              if (!markdownText.trim()) {
-                return false;
-              }
-
               event.preventDefault();
-              currentView.dispatch(currentView.state.replaceSelection(markdownText));
+              const plainText = event.clipboardData?.getData("text/plain") ?? "";
+              void convertClipboardHtmlToMarkdown(html, plainText)
+                .then((markdownText) => {
+                  if (!markdownText.trim()) {
+                    return;
+                  }
+
+                  currentView.dispatch(currentView.state.replaceSelection(markdownText));
+                })
+                .catch(() => {
+                  if (plainText.trim()) {
+                    currentView.dispatch(currentView.state.replaceSelection(plainText));
+                  }
+                });
               return true;
             },
             dragover: (event) => {
@@ -4716,30 +4723,40 @@ function stripMarkdownLinkTitle(value: string) {
 }
 
 let clipboardTurndownService: TurndownService | null = null;
+let clipboardTurndownServicePromise: Promise<TurndownService> | null = null;
 
-function getClipboardTurndownService() {
+async function getClipboardTurndownService() {
   if (clipboardTurndownService) {
     return clipboardTurndownService;
   }
 
-  clipboardTurndownService = new TurndownService({
-    bulletListMarker: "-",
-    codeBlockStyle: "fenced",
-    emDelimiter: "*",
-    headingStyle: "atx",
-    linkStyle: "inlined",
-    strongDelimiter: "**",
-  });
-  return clipboardTurndownService;
+  clipboardTurndownServicePromise ??= import("turndown")
+    .then(({ default: TurndownService }) => {
+      clipboardTurndownService = new TurndownService({
+        bulletListMarker: "-",
+        codeBlockStyle: "fenced",
+        emDelimiter: "*",
+        headingStyle: "atx",
+        linkStyle: "inlined",
+        strongDelimiter: "**",
+      });
+      return clipboardTurndownService;
+    })
+    .catch((error) => {
+      clipboardTurndownServicePromise = null;
+      throw error;
+    });
+
+  return clipboardTurndownServicePromise;
 }
 
-export function convertClipboardHtmlToMarkdown(html: string, plainTextFallback = "") {
+export async function convertClipboardHtmlToMarkdown(html: string, plainTextFallback = "") {
   const normalizedHtml = html.trim();
   if (!normalizedHtml) {
     return plainTextFallback;
   }
 
-  const markdownText = getClipboardTurndownService()
+  const markdownText = (await getClipboardTurndownService())
     .turndown(normalizedHtml)
     .replace(/\u00a0/g, " ")
     .replace(/\n{3,}/g, "\n\n")

@@ -1820,16 +1820,18 @@ describe("toggleMarkdownInlineStyle", () => {
 });
 
 describe("convertClipboardHtmlToMarkdown", () => {
-  it("preserves basic formatting and links from HTML paste payloads", () => {
+  it("preserves basic formatting and links from HTML paste payloads", async () => {
     expect(
-      convertClipboardHtmlToMarkdown(
+      await convertClipboardHtmlToMarkdown(
         '<h2>Heading</h2><p>Text with <strong>bold</strong> and <a href="https://x.test">link</a>.</p>',
       ),
     ).toBe("## Heading\n\nText with **bold** and [link](https://x.test).");
   });
 
-  it("falls back to plain text when the HTML payload has no usable content", () => {
-    expect(convertClipboardHtmlToMarkdown("<br>", "fallback text")).toBe("fallback text");
+  it("falls back to plain text when the HTML payload has no usable content", async () => {
+    await expect(convertClipboardHtmlToMarkdown("<br>", "fallback text")).resolves.toBe(
+      "fallback text",
+    );
   });
 });
 
