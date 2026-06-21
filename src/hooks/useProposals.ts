@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import { invokeBackend } from "../lib/backend";
 import { getErrorMessage } from "../lib/errorMessage";
 import { proposalsForDocument, useReviewDataStore } from "../stores/reviewDataStore";
@@ -7,7 +7,6 @@ import type { DocumentPayload, WorkspaceSnapshot } from "../types/workspace";
 
 interface UseProposalsOptions {
   activeDocument: DocumentPayload | null;
-  externalDocument: DocumentPayload | null;
   onDocumentApplied?: (document: DocumentPayload) => void;
   workspace: WorkspaceSnapshot | null;
 }
@@ -16,60 +15,19 @@ type ProposalActionKind = "accept" | "reject" | null;
 
 export function useProposals({
   activeDocument,
-  externalDocument,
   onDocumentApplied,
   workspace,
 }: UseProposalsOptions) {
   const [activeActionKind, setActiveActionKind] = useState<ProposalActionKind>(null);
   const [activeActionProposalId, setActiveActionProposalId] = useState<string | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
-  const [isProposalLoading, setIsProposalLoading] = useState(false);
   const isLoading = useReviewDataStore((state) => state.isLoading);
   const allProposals = useReviewDataStore((state) => state.proposals);
-  const setDocumentProposals = useReviewDataStore((state) => state.setDocumentProposals);
   const upsertReviewProposal = useReviewDataStore((state) => state.upsertProposal);
   const proposals = useMemo(
     () => proposalsForDocument(allProposals, activeDocument?.id),
     [activeDocument?.id, allProposals],
   );
-
-  useEffect(() => {
-    if (!workspace || !activeDocument) {
-      return;
-    }
-
-    void loadProposals(workspace.rootPath, activeDocument.id);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [
-    activeDocument?.currentContentHash,
-    activeDocument?.id,
-    externalDocument?.currentContentHash,
-    workspace?.rootPath,
-  ]);
-
-  const loadProposals = useCallback(async (
-    workspaceRoot = workspace?.rootPath,
-    documentId = activeDocument?.id,
-  ) => {
-    if (!workspaceRoot || !documentId) {
-      return;
-    }
-
-    setIsProposalLoading(true);
-    setErrorMessage(null);
-
-    try {
-      const nextProposals = await invokeBackend<ProposalRecord[]>("load_proposals", {
-        documentId,
-        workspaceRoot,
-      });
-      setDocumentProposals(documentId, nextProposals);
-    } catch (error) {
-      setErrorMessage(getErrorMessage(error, "Unable to load proposal records."));
-    } finally {
-      setIsProposalLoading(false);
-    }
-  }, [activeDocument?.id, setDocumentProposals, workspace?.rootPath]);
 
   const acceptProposal = useCallback(async (proposalId: string, updatedDocumentText?: string) => {
     if (!workspace) {
@@ -140,8 +98,7 @@ export function useProposals({
       activeActionKind,
       activeActionProposalId,
       errorMessage,
-      isLoading: isLoading || isProposalLoading,
-      loadProposals,
+      isLoading,
       proposals,
       rejectProposal,
       setErrorMessage,
@@ -152,9 +109,7 @@ export function useProposals({
       activeActionKind,
       activeActionProposalId,
       errorMessage,
-      isProposalLoading,
       isLoading,
-      loadProposals,
       proposals,
       rejectProposal,
       upsertProposal,
