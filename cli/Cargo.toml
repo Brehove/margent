@@ -18,6 +18,5 @@ margent-core = { workspace = true }
 time = { workspace = true, features = ["formatting", "parsing"] }
 tokio = { version = "1", features = ["macros", "net", "rt-multi-thread", "sync", "time"] }
 walkdir = { workspace = true }
-similar = { workspace = true }
 wait-timeout = { workspace = true }
 notify = "8"

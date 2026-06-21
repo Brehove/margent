@@ -1,7 +1,7 @@
 use std::{fs, path::Path};
 
+use margent_core::change_set::compute_unified_diff;
 use serde::Serialize;
-use similar::TextDiff;
 
 use crate::models::*;
 use crate::provider::{self, AgentAction, AgentActionEnvelope, Provider, RevisionResult};
@@ -774,16 +774,6 @@ pub fn run_sync(root: &Path, provider: Provider, pass_name: Option<&str>) -> Res
 
     eprintln!("Sync complete: {processed} action(s) applied, {errors} error(s).");
     Ok(())
-}
-
-// ── Helpers ─────────────────────────────────────────────────────────────────
-
-fn compute_unified_diff(before: &str, after: &str) -> String {
-    TextDiff::from_lines(before, after)
-        .unified_diff()
-        .context_radius(2)
-        .header("before", "after")
-        .to_string()
 }
 
 fn summarize(assistant_message: &str, provider_name: &str) -> String {

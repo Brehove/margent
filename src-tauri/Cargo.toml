@@ -30,7 +30,6 @@ regex = "1"
 time = { workspace = true, features = ["formatting"] }
 walkdir = { workspace = true }
 wait-timeout = { workspace = true }
-similar = { workspace = true }
 tauri-plugin-deep-link = "2"
 tauri-plugin-notification = "2"
 tauri-plugin-updater = "2"
