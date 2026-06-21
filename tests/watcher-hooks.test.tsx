@@ -40,7 +40,7 @@ const baseAnchor: AnchorRecord = {
 };
 
 function makeDocument(overrides: Partial<DocumentPayload> = {}): DocumentPayload {
-  return {
+  const document = {
     schemaVersion: 1,
     id: "doc-1",
     relativePath: "test.md",
@@ -55,6 +55,15 @@ function makeDocument(overrides: Partial<DocumentPayload> = {}): DocumentPayload
     headingIndex: [],
     content: "# Watch Test\n\nAlpha beta gamma.\n",
     ...overrides,
+  };
+
+  return {
+    ...document,
+    version: document.version ?? {
+      contentHash: document.currentContentHash,
+      modifiedNs: null,
+      size: new TextEncoder().encode(document.content).length,
+    },
   };
 }
 
@@ -434,13 +443,19 @@ describe("workspace watcher behavior", () => {
     const workspace = makeWorkspace(initialDocument);
 
     invokeMock.mockImplementation(async (command, args) => {
-      if (command === "save_document") {
+      if (command === "save_document_if_current") {
         expect(args).toEqual({
           content: savedDocument.content,
+          expectedVersion: initialDocument.version,
+          operationId: expect.stringMatching(/^save_/),
           relativePath: initialDocument.relativePath,
           workspaceRoot: workspace.rootPath,
         });
-        return savedDocument;
+        return {
+          status: "saved",
+          document: savedDocument,
+          operationId: args?.operationId,
+        };
       }
 
       throw new Error(`Unexpected invoke command: ${command}`);
@@ -458,6 +473,69 @@ describe("workspace watcher behavior", () => {
     expect(invokeMock).toHaveBeenCalledTimes(1);
     expect(useWorkspaceStore.getState().activeDocument?.content).toBe(savedDocument.content);
     expect(useWorkspaceStore.getState().isEditorDirty).toBe(false);
+  });
+
+  it("preserves the local buffer when expected-version save detects a disk conflict", async () => {
+    const initialDocument = makeDocument({
+      content: "# Watch Test\n\nOriginal.\n",
+      currentContentHash: "sha256:old",
+    });
+    const diskDocument = makeDocument({
+      content: "# Watch Test\n\nDisk edit.\n",
+      currentContentHash: "sha256:disk",
+      updatedAt: "2026-03-19T00:05:00Z",
+      version: {
+        contentHash: "sha256:disk",
+        modifiedNs: "123",
+        size: 25,
+      },
+    });
+    const localContent = "# Watch Test\n\nMargent edit.\n";
+    const workspace = makeWorkspace(initialDocument);
+
+    invokeMock.mockImplementation(async (command, args) => {
+      if (command === "save_document_if_current") {
+        expect(args).toEqual({
+          content: localContent,
+          expectedVersion: initialDocument.version,
+          operationId: expect.stringMatching(/^save_/),
+          relativePath: initialDocument.relativePath,
+          workspaceRoot: workspace.rootPath,
+        });
+        return {
+          status: "conflict",
+          expectedVersion: initialDocument.version,
+          actualVersion: diskDocument.version,
+          operationId: args?.operationId,
+        };
+      }
+
+      if (command === "read_document") {
+        expect(args).toEqual({
+          relativePath: initialDocument.relativePath,
+          workspaceRoot: workspace.rootPath,
+        });
+        return diskDocument;
+      }
+
+      throw new Error(`Unexpected invoke command: ${command}`);
+    });
+
+    useWorkspaceStore.setState({
+      activeDocument: initialDocument,
+      isEditorDirty: false,
+      status: "ready",
+      workspace,
+    });
+
+    await saveCurrentDocument(localContent);
+
+    expect(invokeMock).toHaveBeenCalledTimes(2);
+    expect(useWorkspaceStore.getState().activeDocument?.content).toBe(initialDocument.content);
+    expect(useWorkspaceStore.getState().pendingExternalDocument).toEqual(diskDocument);
+    expect(useWorkspaceStore.getState().saveConflict?.localContent).toBe(localContent);
+    expect(useWorkspaceStore.getState().saveConflict?.diskDocument).toEqual(diskDocument);
+    expect(useWorkspaceStore.getState().isEditorDirty).toBe(true);
   });
 
   it("does not save unchanged clean content", async () => {

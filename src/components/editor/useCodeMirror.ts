@@ -9,6 +9,7 @@ import {
 import TurndownService from "turndown";
 import {
   Compartment,
+  EditorSelection,
   EditorState,
   type ChangeDesc,
   Prec,
@@ -43,6 +44,12 @@ import { classifyFootnoteSelection, collectFootnoteDefinitions } from "../../lib
 import type { EditorMode } from "../../stores/uiStore";
 import type { EditorSelectionSnapshot } from "../../types/thread";
 import type { ThreadRecord } from "../../types/thread";
+import {
+  getProposalHunkAnchorPosition,
+  proposalReviewDecorationsField,
+  setProposalReviewEditorState,
+  type ProposalReviewEditorState,
+} from "./cm/proposalReviewExtension";
 
 interface UseCodeMirrorOptions {
   editorMode?: EditorMode;
@@ -56,6 +63,7 @@ interface UseCodeMirrorOptions {
   onSaveRequested?: (content: string) => void;
   onSelectionChange?: (selection: EditorSelectionSnapshot | null) => void;
   onThreadSelect?: (threadId: string | null) => void;
+  proposalReview?: ProposalReviewEditorState | null;
   resolveMarkdownImageSource?: (source: string) => string;
   selectedThreadId?: string | null;
   threads?: ThreadRecord[];
@@ -82,7 +90,7 @@ export interface CodeMirrorSession {
   markClean: () => void;
   openSearch: () => void;
   removeMarkdownLink: (link: ActiveMarkdownLink) => void;
-  replaceContent: (nextContent: string) => void;
+  replaceContent: (nextContent: string, options?: { preserveViewport?: boolean }) => void;
   scrollToLine: (lineNumber: number) => void;
   updateFootnoteDefinition: (
     footnoteDefinition: ActiveFootnoteDefinition,
@@ -2829,6 +2837,75 @@ const margentReadableTheme = EditorView.theme({
     backgroundColor: "var(--editor-anchor-wash)",
     boxShadow: "inset 0 -1px 0 var(--editor-anchor-underline)",
   },
+  ".cm-thread-anchor:has(.cm-proposal-inline-revision), .cm-thread-anchor.is-active:has(.cm-proposal-inline-revision)": {
+    backgroundColor: "transparent",
+    boxShadow: "none",
+  },
+  ".cm-proposal-inline-revision": {
+    borderRadius: "3px",
+    cursor: "pointer",
+    whiteSpace: "pre-wrap",
+  },
+  ".cm-proposal-inline-revision.is-block": {
+    display: "block",
+    lineHeight: "1.58",
+    padding: "2px 0",
+  },
+  ".cm-proposal-inline-revision.is-active": {
+    boxShadow: "0 0 0 1px rgba(13, 72, 69, 0.12)",
+  },
+  ".cm-proposal-inline-revision.is-excluded": {
+    opacity: "0.5",
+  },
+  ".cm-proposal-inline-content": {
+    whiteSpace: "pre-wrap",
+  },
+  ".cm-proposal-inline-token": {
+    borderRadius: "3px",
+    padding: "0 2px",
+  },
+  ".cm-proposal-inline-token.is-delete": {
+    backgroundColor: "rgba(180, 35, 24, 0.09)",
+    color: "#9f2a20",
+    textDecoration: "line-through",
+    textDecorationColor: "rgba(180, 35, 24, 0.58)",
+  },
+  ".cm-proposal-inline-token.is-insert": {
+    backgroundColor: "rgba(52, 118, 70, 0.12)",
+    color: "#237044",
+    boxShadow: "inset 0 -1px 0 rgba(52, 118, 70, 0.42)",
+  },
+  ".cm-proposal-inline-token.is-replace": {
+    backgroundColor: "rgba(52, 118, 70, 0.12)",
+    boxShadow: "inset 0 -1px 0 rgba(52, 118, 70, 0.42)",
+    color: "#237044",
+  },
+  ".cm-proposal-inline-chip": {
+    alignItems: "center",
+    border: "1px solid var(--editor-marker-active-border)",
+    borderRadius: "999px",
+    background: "var(--editor-marker-active-bg)",
+    color: "var(--editor-marker-active-ink)",
+    cursor: "pointer",
+    display: "inline-flex",
+    font: "inherit",
+    fontSize: "10px",
+    fontWeight: "700",
+    height: "17px",
+    justifyContent: "center",
+    lineHeight: "1",
+    marginLeft: "5px",
+    minWidth: "17px",
+    padding: "0 5px",
+    position: "relative",
+    top: "-1px",
+    verticalAlign: "middle",
+  },
+  ".cm-proposal-inline-chip:hover": {
+    borderColor: "var(--editor-marker-hover-border)",
+    background: "var(--editor-marker-hover-bg)",
+    color: "var(--editor-marker-hover-ink)",
+  },
   "&.cm-rendered-mode .cm-gutters": {
     backgroundColor: "var(--editor-gutter-bg)",
     color: "var(--editor-syntax-faded)",
@@ -2947,6 +3024,7 @@ export function useCodeMirror({
   onSaveRequested,
   onSelectionChange,
   onThreadSelect,
+  proposalReview = null,
   resolveMarkdownImageSource,
   selectedThreadId = null,
   threads = [],
@@ -2980,6 +3058,7 @@ export function useCodeMirror({
   const pendingSessionSnapshotFrameRef = useRef<number | null>(null);
   const pendingSessionMetricsTimeoutRef = useRef<number | null>(null);
   const suppressNextRevisionIncrementRef = useRef(false);
+  const proposalReviewRef = useRef<ProposalReviewEditorState | null>(proposalReview);
   const threadsRef = useRef(threads);
   const selectedThreadIdRef = useRef<string | null>(selectedThreadId);
   const editorModeRef = useRef<EditorMode>(editorMode);
@@ -3017,6 +3096,33 @@ export function useCodeMirror({
   useEffect(() => {
     onThreadSelectRef.current = onThreadSelect;
   }, [onThreadSelect]);
+
+  useEffect(() => {
+    const previousActiveHunkId = proposalReviewRef.current?.activeHunkId ?? null;
+    proposalReviewRef.current = proposalReview;
+    const view = viewRef.current;
+    if (!view) {
+      return;
+    }
+
+    applyProposalReviewState(view, proposalReview);
+
+    const nextActiveHunkId = proposalReview?.activeHunkId ?? null;
+    if (nextActiveHunkId && nextActiveHunkId !== previousActiveHunkId) {
+      const activeHunk = proposalReview?.changeSet.hunks.find(
+        (hunk) => hunk.id === nextActiveHunkId,
+      );
+      const activePosition = activeHunk ? getProposalHunkAnchorPosition(view.state, activeHunk) : null;
+      if (activePosition !== null) {
+        view.dispatch({
+          effects: EditorView.scrollIntoView(activePosition, {
+            y: "center",
+            yMargin: 96,
+          }),
+        });
+      }
+    }
+  }, [proposalReview]);
 
   useEffect(() => {
     resolveMarkdownImageSourceRef.current = resolveMarkdownImageSource;
@@ -3289,7 +3395,7 @@ export function useCodeMirror({
           },
         });
       },
-      replaceContent(nextContent: string) {
+      replaceContent(nextContent: string, options = {}) {
         const view = viewRef.current;
         if (!view) {
           return;
@@ -3306,13 +3412,28 @@ export function useCodeMirror({
         cleanRevisionRef.current = revisionRef.current;
         suppressNextRevisionIncrementRef.current = true;
         cancelPendingSessionUpdates();
+        const preserveViewport = options.preserveViewport === true;
+        const scrollTop = view.scrollDOM.scrollTop;
+        const scrollLeft = view.scrollDOM.scrollLeft;
+        const selection = view.state.selection.main;
+        const nextSelection = preserveViewport
+          ? EditorSelection.range(
+              Math.min(selection.anchor, nextContent.length),
+              Math.min(selection.head, nextContent.length),
+            )
+          : undefined;
         view.dispatch({
           changes: {
             from: 0,
             to: view.state.doc.length,
             insert: nextContent,
           },
+          effects: preserveViewport ? view.scrollSnapshot() : undefined,
+          selection: nextSelection,
         });
+        if (preserveViewport) {
+          restoreEditorScroll(view, scrollTop, scrollLeft);
+        }
 
         const nextThreadPresentation = buildThreadPresentation(threadsRef.current, view.state);
         applyThreadPresentation(view, nextThreadPresentation, selectedThreadIdRef.current);
@@ -3428,6 +3549,7 @@ export function useCodeMirror({
           pendingImageInsertionRangeField,
 	          threadPresentationField,
 	          threadDecorationsField,
+          proposalReviewDecorationsField,
           layer({
             above: true,
             class: "cm-thread-marker-layer",
@@ -3534,6 +3656,11 @@ export function useCodeMirror({
                 return false;
               }
 
+              if (target.closest(".cm-proposal-inline-revision")) {
+                event.preventDefault();
+                return true;
+              }
+
               const view = viewRef.current;
               const clickedLink =
                 view && getEditorPresentationMode(view.state) === "rendered"
@@ -3634,7 +3761,7 @@ export function useCodeMirror({
 
               event.preventDefault();
               const position =
-                currentView.posAtCoords({
+                safePosAtCoords(currentView, {
                   x: event.clientX,
                   y: event.clientY,
                 }) ?? currentView.state.selection.main.head;
@@ -3671,6 +3798,7 @@ export function useCodeMirror({
     updateSessionMetrics(view.state);
     const initialThreadPresentation = buildThreadPresentation(threads, view.state);
     applyThreadPresentation(view, initialThreadPresentation, selectedThreadId);
+    applyProposalReviewState(view, proposalReviewRef.current);
     if (document.fonts) {
       void document.fonts.ready.then(() => {
         if (viewRef.current === view) {
@@ -3789,6 +3917,29 @@ function applyThreadPresentation(
 
 function getThreadPresentation(state: EditorState) {
   return state.field(threadPresentationField);
+}
+
+function applyProposalReviewState(
+  view: EditorView,
+  proposalReview: ProposalReviewEditorState | null,
+) {
+  view.dispatch({
+    effects: setProposalReviewEditorState.of(proposalReview),
+  });
+}
+
+function restoreEditorScroll(view: EditorView, scrollTop: number, scrollLeft: number) {
+  view.scrollDOM.scrollTop = scrollTop;
+  view.scrollDOM.scrollLeft = scrollLeft;
+
+  window.requestAnimationFrame(() => {
+    if (!view.dom.isConnected) {
+      return;
+    }
+
+    view.scrollDOM.scrollTop = scrollTop;
+    view.scrollDOM.scrollLeft = scrollLeft;
+  });
 }
 
 export function buildThreadDecorationSet(
@@ -4219,7 +4370,7 @@ function readActiveMarkdownLinkAtSelection(
 }
 
 function readMarkdownLinkAtMouseEvent(view: EditorView, event: MouseEvent) {
-  const position = view.posAtCoords({
+  const position = safePosAtCoords(view, {
     x: event.clientX,
     y: event.clientY,
   });
@@ -4238,6 +4389,14 @@ function readMarkdownLinkAtMouseEvent(view: EditorView, event: MouseEvent) {
     (linkNode ? parseMarkdownLinkNode(view.state, linkNode) : null) ??
     findLooseLocalMarkdownLinkAtRange(view.state, position, position)
   );
+}
+
+function safePosAtCoords(view: EditorView, coords: { x: number; y: number }) {
+  try {
+    return view.posAtCoords(coords);
+  } catch {
+    return null;
+  }
 }
 
 function findLooseLocalMarkdownLinkAtRange(state: EditorState, from: number, to: number) {

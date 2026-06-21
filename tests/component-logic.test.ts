@@ -105,11 +105,20 @@ function makeDocumentSummary(
 function makeDocumentPayload(
   overrides: Partial<DocumentPayload> = {},
 ): DocumentPayload {
-  return {
+  const document = {
     ...makeDocumentSummary(),
     absolutePath: "/workspace/README.md",
     content: README_CONTENT,
     ...overrides,
+  };
+
+  return {
+    ...document,
+    version: document.version ?? {
+      contentHash: document.currentContentHash,
+      modifiedNs: null,
+      size: new TextEncoder().encode(document.content).length,
+    },
   };
 }
 

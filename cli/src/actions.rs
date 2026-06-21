@@ -329,6 +329,7 @@ pub fn write_revision_proposal(
         resolve_thread_ids,
         stderr: None,
         error_message: None,
+        extra: Default::default(),
     };
 
     workspace::save_proposal(root, &proposal)?;

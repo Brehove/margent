@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 
 use crate::document::{content_hash, HeadingIndexEntry};
 use crate::thread::AnchorRecord;
@@ -8,6 +8,11 @@ const CLEAR_WINNER_DELTA: f32 = 0.1;
 const STRUCTURED_NEEDS_REVIEW_THRESHOLD: f32 = 0.4;
 const STRUCTURED_CLEAR_WINNER_DELTA: f32 = 0.04;
 const MIN_FUZZY_QUOTE_SIMILARITY: f32 = 0.24;
+const MAX_FUZZY_BLOCK_CANDIDATES: usize = 32;
+const MAX_FUZZY_WINDOW_EVALUATIONS: usize = 320;
+const MAX_WINDOWED_FUZZY_QUOTE_CHARS: usize = 900;
+const MAX_WINDOWED_FUZZY_QUOTE_WORDS: usize = 120;
+const FOCUSED_FUZZY_RADIUS_TOKENS: usize = 36;
 
 pub fn reattach_anchor(
     anchor: &mut AnchorRecord,
@@ -648,6 +653,7 @@ fn score_fuzzy_block_candidates(
 ) -> Vec<ScoredCandidate> {
     let expected_heading =
         (!anchor.heading_path.is_empty()).then_some(anchor.heading_path.as_slice());
+    let mut block_candidates = Vec::new();
     let mut scored = Vec::new();
 
     for block in blocks {
@@ -658,6 +664,30 @@ fn score_fuzzy_block_candidates(
         if !fingerprint_matches && heading_similarity < 0.18 {
             continue;
         }
+
+        block_candidates.push(FuzzyBlockCandidate {
+            block,
+            fingerprint_matches,
+            heading_similarity,
+            offset_distance: anchor.start_offset_utf16.abs_diff(block.start_offset_utf16),
+        });
+    }
+
+    block_candidates.sort_by(|left, right| {
+        right
+            .fingerprint_matches
+            .cmp(&left.fingerprint_matches)
+            .then_with(|| right.heading_similarity.total_cmp(&left.heading_similarity))
+            .then_with(|| left.offset_distance.cmp(&right.offset_distance))
+    });
+
+    for candidate in block_candidates
+        .into_iter()
+        .take(MAX_FUZZY_BLOCK_CANDIDATES)
+    {
+        let block = candidate.block;
+        let heading_similarity = candidate.heading_similarity;
+        let fingerprint_matches = candidate.fingerprint_matches;
 
         let Some(best_window) = best_fuzzy_window_for_block(anchor, content, block) else {
             continue;
@@ -707,6 +737,13 @@ fn best_fuzzy_window_for_block(
 ) -> Option<FuzzyWindow> {
     let token_spans = collect_token_spans(&block.text);
     let expected_words = anchor.quote.split_whitespace().count().max(1);
+
+    if anchor.quote.len() > MAX_WINDOWED_FUZZY_QUOTE_CHARS
+        || expected_words > MAX_WINDOWED_FUZZY_QUOTE_WORDS
+    {
+        return fuzzy_block_window(anchor, content, block);
+    }
+
     let min_words = expected_words.saturating_sub(2).max(1);
     let max_words = (expected_words + 2).min(token_spans.len().max(1));
     let mut best_window: Option<FuzzyWindow> = None;
@@ -725,12 +762,20 @@ fn best_fuzzy_window_for_block(
         });
     }
 
-    for start_index in 0..token_spans.len() {
-        for length in min_words..=max_words {
+    let lengths = (min_words..=max_words).collect::<Vec<_>>();
+    let start_indices = fuzzy_window_start_indices(anchor, block, token_spans.len(), lengths.len());
+    let mut evaluation_count = 0usize;
+
+    'windows: for start_index in start_indices {
+        for &length in &lengths {
+            if evaluation_count >= MAX_FUZZY_WINDOW_EVALUATIONS {
+                break 'windows;
+            }
             let end_index = start_index + length;
             if end_index > token_spans.len() {
                 break;
             }
+            evaluation_count += 1;
 
             let byte_start = token_spans[start_index].start_byte;
             let byte_end = token_spans[end_index - 1].end_byte;
@@ -769,6 +814,75 @@ fn best_fuzzy_window_for_block(
     best_window
 }
 
+fn fuzzy_block_window(
+    anchor: &AnchorRecord,
+    content: &str,
+    block: &DocumentBlock,
+) -> Option<FuzzyWindow> {
+    if block.text.trim().is_empty() {
+        return None;
+    }
+
+    let range = block_range(content, block);
+    let context = context_evidence(anchor, content, &range);
+
+    Some(FuzzyWindow {
+        prefix_matches: context.prefix_matches,
+        prefix_similarity: context.prefix_similarity,
+        quote_similarity: text_similarity(&anchor.quote, &block.text),
+        range,
+        suffix_matches: context.suffix_matches,
+        suffix_similarity: context.suffix_similarity,
+    })
+}
+
+fn fuzzy_window_start_indices(
+    anchor: &AnchorRecord,
+    block: &DocumentBlock,
+    token_count: usize,
+    length_count: usize,
+) -> Vec<usize> {
+    if token_count == 0 {
+        return Vec::new();
+    }
+
+    if token_count.saturating_mul(length_count) <= MAX_FUZZY_WINDOW_EVALUATIONS {
+        return (0..token_count).collect();
+    }
+
+    let mut indices = BTreeSet::new();
+    let block_len_utf16 = block
+        .end_offset_utf16
+        .saturating_sub(block.start_offset_utf16)
+        .max(1);
+    let relative_utf16 = anchor
+        .start_offset_utf16
+        .saturating_sub(block.start_offset_utf16)
+        .min(block_len_utf16);
+    let estimated = relative_utf16.saturating_mul(token_count.saturating_sub(1)) / block_len_utf16;
+    let focused_start = estimated.saturating_sub(FOCUSED_FUZZY_RADIUS_TOKENS);
+    let focused_end = estimated
+        .saturating_add(FOCUSED_FUZZY_RADIUS_TOKENS)
+        .min(token_count.saturating_sub(1));
+
+    for index in focused_start..=focused_end {
+        indices.insert(index);
+    }
+
+    let target_starts = (MAX_FUZZY_WINDOW_EVALUATIONS / length_count.max(1)).max(1);
+    if indices.len() < target_starts {
+        let step = (token_count / target_starts).max(1);
+        let mut index = 0usize;
+        while index < token_count && indices.len() < target_starts {
+            indices.insert(index);
+            index = index.saturating_add(step);
+        }
+        indices.insert(token_count - 1);
+    }
+
+    indices.into_iter().collect()
+}
+
 fn collect_quote_matches(quote: &str, content: &str) -> Vec<ResolvedRange> {
     if quote.is_empty() {
         return Vec::new();
@@ -794,9 +908,8 @@ fn collect_blocks(content: &str, heading_index: &[HeadingIndexEntry]) -> Vec<Doc
     let mut current: Option<WorkingBlock> = None;
     let mut byte_cursor = 0usize;
     let mut utf16_cursor = 0usize;
-    let mut line_number = 1usize;
 
-    for raw_line in content.split_inclusive('\n') {
+    for (line_number, raw_line) in (1usize..).zip(content.split_inclusive('\n')) {
         let line_body = raw_line
             .strip_suffix('\n')
             .unwrap_or(raw_line)
@@ -823,7 +936,6 @@ fn collect_blocks(content: &str, heading_index: &[HeadingIndexEntry]) -> Vec<Doc
 
         byte_cursor += raw_line.len();
         utf16_cursor += raw_line.encode_utf16().count();
-        line_number += 1;
     }
 
     if let Some(block) = current.take() {
@@ -1276,6 +1388,13 @@ struct FuzzyWindow {
     suffix_similarity: f32,
 }
 
+struct FuzzyBlockCandidate<'a> {
+    block: &'a DocumentBlock,
+    fingerprint_matches: bool,
+    heading_similarity: f32,
+    offset_distance: usize,
+}
+
 impl FuzzyWindow {
     fn window_score(&self) -> f32 {
         self.quote_similarity * 0.72 + self.prefix_similarity * 0.14 + self.suffix_similarity * 0.14
@@ -1480,6 +1599,115 @@ mod tests {
         assert_eq!(anchor.start_line, 3);
         assert_eq!(anchor.state, "shifted");
         assert!(anchor.confidence >= NEEDS_REVIEW_THRESHOLD);
+    }
+
+    #[test]
+    fn bounds_fuzzy_window_sampling_for_large_blocks() {
+        let block = DocumentBlock {
+            end_offset_utf16: 10_000,
+            fingerprint: "sha256:test".into(),
+            heading_path: vec!["Section".into()],
+            start_offset_utf16: 0,
+            text: String::new(),
+        };
+        let anchor = AnchorRecord {
+            quote: "old paragraph text".into(),
+            prefix_context: String::new(),
+            suffix_context: String::new(),
+            start_offset_utf16: 5_000,
+            end_offset_utf16: 5_100,
+            start_line: 1,
+            start_column: 1,
+            end_line: 1,
+            end_column: 101,
+            heading_path: vec!["Section".into()],
+            block_fingerprint: "sha256:other".into(),
+            base_content_hash: "sha256:base".into(),
+            kind: "text_span".into(),
+            footnote: None,
+            state: "attached".into(),
+            confidence: 1.0,
+        };
+
+        let starts = fuzzy_window_start_indices(&anchor, &block, 5_000, 5);
+
+        assert!(starts.len() < 100);
+        assert!(starts.contains(&2_499) || starts.contains(&2_500));
+    }
+
+    #[test]
+    fn bounds_fuzzy_block_candidates_for_repeated_headings() {
+        let mut content = String::from("# Section\n\n");
+        for index in 0..96 {
+            content.push_str(&format!(
+                "Paragraph {index} keeps enough nearby language for fuzzy comparison under one heading.\n\n"
+            ));
+        }
+        let blocks = collect_blocks(&content, &headings(&content));
+        let anchor_start = content.find("Paragraph 48").expect("anchor block");
+        let anchor = AnchorRecord {
+            quote: "edited nearby language".into(),
+            prefix_context: String::new(),
+            suffix_context: String::new(),
+            start_offset_utf16: byte_to_utf16_index(&content, anchor_start),
+            end_offset_utf16: byte_to_utf16_index(&content, anchor_start + "Paragraph 48".len()),
+            start_line: 99,
+            start_column: 1,
+            end_line: 99,
+            end_column: 13,
+            heading_path: vec!["Section".into()],
+            block_fingerprint: "sha256:other".into(),
+            base_content_hash: "sha256:base".into(),
+            kind: "text_span".into(),
+            footnote: None,
+            state: "attached".into(),
+            confidence: 1.0,
+        };
+
+        let scored = score_fuzzy_block_candidates(&anchor, &content, &blocks);
+
+        assert!(scored.len() <= MAX_FUZZY_BLOCK_CANDIDATES);
+    }
+
+    #[test]
+    fn long_fuzzy_quotes_use_block_level_window() {
+        let original_quote = (0..150)
+            .map(|index| format!("original-token-{index}"))
+            .collect::<Vec<_>>()
+            .join(" ");
+        let updated_block = (0..220)
+            .map(|index| format!("updated-token-{index}"))
+            .collect::<Vec<_>>()
+            .join(" ");
+        let content = format!("# Section\n\n{updated_block}\n");
+        let block = collect_blocks(&content, &headings(&content))
+            .into_iter()
+            .find(|entry| entry.text.contains("updated-token-0"))
+            .expect("content block");
+        let anchor = AnchorRecord {
+            quote: original_quote,
+            prefix_context: String::new(),
+            suffix_context: String::new(),
+            start_offset_utf16: block.start_offset_utf16,
+            end_offset_utf16: block.end_offset_utf16,
+            start_line: 3,
+            start_column: 1,
+            end_line: 3,
+            end_column: 10,
+            heading_path: vec!["Section".into()],
+            block_fingerprint: "sha256:other".into(),
+            base_content_hash: "sha256:base".into(),
+            kind: "text_span".into(),
+            footnote: None,
+            state: "attached".into(),
+            confidence: 1.0,
+        };
+
+        let window =
+            best_fuzzy_window_for_block(&anchor, &content, &block).expect("coarse fuzzy window");
+
+        assert_eq!(window.range.start_offset_utf16, block.start_offset_utf16);
+        assert_eq!(window.range.end_offset_utf16, block.end_offset_utf16);
     }
 
     fn headings(content: &str) -> Vec<HeadingIndexEntry> {

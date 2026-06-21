@@ -25,6 +25,7 @@ import { useThreads } from "./hooks/useThreads";
 import {
   createMarkdownFile,
   deleteMarkdownFile,
+  keepMargentVersionForSaveConflict,
   loadDocument,
   importWorkspaceAsset,
   openFileWorkspace,
@@ -33,6 +34,7 @@ import {
   renameMarkdownFile,
   refreshWorkspaceFiles,
   revealMarkdownFile,
+  reloadSaveConflictDiskVersion,
   saveCurrentDocument,
   useWorkspaceEffects,
 } from "./hooks/useWorkspace";
@@ -45,13 +47,24 @@ import type { ProviderReadiness } from "./types/providerReadiness";
 import type { ReviewPassSummary } from "./types/reviewPass";
 import type { ProjectSearchResult } from "./types/search";
 import type { EditorSelectionSnapshot, ThreadRecord } from "./types/thread";
-import type { DocumentPayload } from "./types/workspace";
+import type { DocumentPayload, SaveConflict } from "./types/workspace";
 
 type AgentProviderId = "codex" | "claude";
 type AppView = "editor" | "project-search" | "providers" | "review-brief";
 type ProviderThreadActionKind = "feedback" | "revise";
 type ProviderDocumentActionKind = "feedback" | "revise";
 const PROVIDER_STREAM_EVENT = "margent://provider-stream";
+
+function safeUnlisten(unlisten: () => void | Promise<void>) {
+  try {
+    const result = unlisten();
+    if (result && typeof result.then === "function") {
+      void result.catch(() => {});
+    }
+  } catch {
+    // Tauri dev can race listener cleanup during hot reload.
+  }
+}
 
 interface EditorNavigationRequest {
   id: number;
@@ -94,10 +107,12 @@ function App() {
   const activeDocument = useWorkspaceStore((state) => state.activeDocument);
   const errorMessage = useWorkspaceStore((state) => state.errorMessage);
   const isEditorDirty = useWorkspaceStore((state) => state.isEditorDirty);
+  const isSaving = useWorkspaceStore((state) => state.isSaving);
   const isFocusModeEnabled = useUiStore((state) => state.isFocusModeEnabled);
   const isWorkspacePaneCollapsed = useUiStore((state) => state.isWorkspacePaneCollapsed);
   const preferredReviewPassName = useUiStore((state) => state.preferredReviewPassName);
   const pendingExternalDocument = useWorkspaceStore((state) => state.pendingExternalDocument);
+  const saveConflict = useWorkspaceStore((state) => state.saveConflict);
   const setActiveDocument = useWorkspaceStore((state) => state.setActiveDocument);
   const setPreferredReviewPassName = useUiStore((state) => state.setPreferredReviewPassName);
   const setWorkspaceErrorMessage = useWorkspaceStore((state) => state.setErrorMessage);
@@ -117,6 +132,7 @@ function App() {
   const [isFocusChromeDimmed, setIsFocusChromeDimmed] = useState(false);
   const [isRecentMenuOpen, setIsRecentMenuOpen] = useState(false);
   const [isProviderReadinessLoading, setIsProviderReadinessLoading] = useState(false);
+  const [isSaveConflictCompareOpen, setIsSaveConflictCompareOpen] = useState(false);
   const [providerReadiness, setProviderReadiness] = useState<ProviderReadiness[]>([]);
   const [providerReadinessError, setProviderReadinessError] = useState<string | null>(null);
   const [reviewPasses, setReviewPasses] = useState<ReviewPassSummary[]>([]);
@@ -197,6 +213,12 @@ function App() {
       root.removeAttribute("data-theme");
     };
   }, [themeMode]);
+
+  useEffect(() => {
+    if (!saveConflict) {
+      setIsSaveConflictCompareOpen(false);
+    }
+  }, [saveConflict]);
 
   useEffect(() => {
     void loadProviderReadiness();
@@ -891,7 +913,7 @@ function App() {
     })
       .then((unlisten) => {
         if (cancelled) {
-          unlisten();
+          safeUnlisten(unlisten);
           return;
         }
 
@@ -901,7 +923,9 @@ function App() {
 
     return () => {
       cancelled = true;
-      stopListening?.();
+      if (stopListening) {
+        safeUnlisten(stopListening);
+      }
     };
   }, [handleAppMenuCommand]);
 
@@ -931,7 +955,7 @@ function App() {
     })
       .then((unlisten) => {
         if (cancelled) {
-          unlisten();
+          safeUnlisten(unlisten);
           return;
         }
 
@@ -941,7 +965,9 @@ function App() {
 
     return () => {
       cancelled = true;
-      stopListening?.();
+      if (stopListening) {
+        safeUnlisten(stopListening);
+      }
     };
   }, []);
 
@@ -1407,6 +1433,16 @@ function App() {
       </header>
 
       {errorMessage ? <div className="banner error-banner">{errorMessage}</div> : null}
+      {saveConflict ? (
+        <SaveConflictBanner
+          conflict={saveConflict}
+          isCompareOpen={isSaveConflictCompareOpen}
+          isSaving={isSaving}
+          onCompare={() => setIsSaveConflictCompareOpen((current) => !current)}
+          onKeep={() => void keepMargentVersionForSaveConflict()}
+          onReload={reloadSaveConflictDiskVersion}
+        />
+      ) : null}
       {exportStatusMessage ? (
         <div className="banner info-banner">{exportStatusMessage}</div>
       ) : null}
@@ -1583,6 +1619,56 @@ function App() {
         </section>
       )}
     </main>
+  );
+}
+
+function SaveConflictBanner({
+  conflict,
+  isCompareOpen,
+  isSaving,
+  onCompare,
+  onKeep,
+  onReload,
+}: {
+  conflict: SaveConflict;
+  isCompareOpen: boolean;
+  isSaving: boolean;
+  onCompare: () => void;
+  onKeep: () => void;
+  onReload: () => void;
+}) {
+  return (
+    <section className="banner save-conflict-banner" aria-live="polite">
+      <div className="save-conflict-summary">
+        <div>
+          <strong>Document changed on disk.</strong>
+          <span>{conflict.relativePath}</span>
+        </div>
+        <div className="save-conflict-actions">
+          <button className="ghost-button" onClick={onCompare} type="button">
+            {isCompareOpen ? "Hide Compare" : "Compare"}
+          </button>
+          <button className="ghost-button" disabled={isSaving} onClick={onReload} type="button">
+            Reload Disk Version
+          </button>
+          <button className="primary-button" disabled={isSaving} onClick={onKeep} type="button">
+            Keep Margent Version
+          </button>
+        </div>
+      </div>
+      {isCompareOpen ? (
+        <div className="save-conflict-compare">
+          <section>
+            <h3>Margent draft</h3>
+            <pre>{conflict.localContent}</pre>
+          </section>
+          <section>
+            <h3>Disk version</h3>
+            <pre>{conflict.diskDocument.content}</pre>
+          </section>
+        </div>
+      ) : null}
+    </section>
   );
 }
 

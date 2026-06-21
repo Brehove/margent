@@ -2,7 +2,6 @@ use std::fs;
 use std::fs::OpenOptions;
 use std::io::Write;
 use std::path::{Component, Path, PathBuf};
-use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::{de::DeserializeOwned, Serialize};
 use sha2::{Digest, Sha256};
@@ -27,6 +26,8 @@ pub fn ensure_workspace_layout(root: &Path) -> Result<PathBuf, String> {
         .map_err(|error| format!("Unable to create .mdreview/agents: {error}"))?;
     fs::create_dir_all(mdreview_path.join("authorship"))
         .map_err(|error| format!("Unable to create .mdreview/authorship: {error}"))?;
+    fs::create_dir_all(mdreview_path.join("snapshots"))
+        .map_err(|error| format!("Unable to create .mdreview/snapshots: {error}"))?;
 
     let adapters_path = mdreview_path.join("adapters.json");
     if !adapters_path.exists() {
@@ -54,6 +55,28 @@ pub fn read_optional_json<T: DeserializeOwned>(path: &Path) -> Result<Option<T>,
         .map_err(|error| format!("Unable to parse {}: {error}", path.display()))
 }
 
+pub fn read_scanned_json<T: DeserializeOwned>(
+    path: &Path,
+    sidecar_kind: &str,
+) -> Result<Option<T>, String> {
+    let text = match fs::read_to_string(path) {
+        Ok(text) => text,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(format!("Unable to read {}: {error}", path.display())),
+    };
+
+    match serde_json::from_str(&text) {
+        Ok(record) => Ok(Some(record)),
+        Err(error) => {
+            eprintln!(
+                "Warning: skipping corrupt {sidecar_kind} sidecar {}: {error}",
+                path.display()
+            );
+            Ok(None)
+        }
+    }
+}
+
 pub fn write_json_atomic<T: Serialize>(path: &Path, value: &T) -> Result<(), String> {
     let body = serde_json::to_string_pretty(value)
         .map_err(|error| format!("Unable to serialize {}: {error}", path.display()))?;
@@ -61,30 +84,11 @@ pub fn write_json_atomic<T: Serialize>(path: &Path, value: &T) -> Result<(), Str
 }
 
 pub fn write_string_atomic(path: &Path, body: &str) -> Result<(), String> {
-    write_bytes_atomic(path, body.as_bytes())
+    margent_core::io::write_string_atomic(path, body)
 }
 
 pub fn write_bytes_atomic(path: &Path, body: &[u8]) -> Result<(), String> {
-    let parent = path
-        .parent()
-        .ok_or_else(|| format!("Missing parent directory for {}", path.display()))?;
-    fs::create_dir_all(parent)
-        .map_err(|error| format!("Unable to create {}: {error}", parent.display()))?;
-
-    let nonce = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map_err(|error| format!("Unable to compute system time: {error}"))?
-        .as_nanos();
-    let file_name = path
-        .file_name()
-        .and_then(|value| value.to_str())
-        .ok_or_else(|| format!("Invalid filename for {}", path.display()))?;
-    let tmp_path = parent.join(format!(".{file_name}.{nonce}.tmp"));
-
-    fs::write(&tmp_path, body)
-        .map_err(|error| format!("Unable to write {}: {error}", tmp_path.display()))?;
-    fs::rename(&tmp_path, path)
-        .map_err(|error| format!("Unable to move {} into place: {error}", path.display()))
+    margent_core::io::write_file_atomic(path, body)
 }
 
 pub fn append_ndjson<T: Serialize>(path: &Path, value: &T) -> Result<(), String> {
@@ -103,7 +107,11 @@ pub fn append_ndjson<T: Serialize>(path: &Path, value: &T) -> Result<(), String>
         .map_err(|error| format!("Unable to open {}: {error}", path.display()))?;
 
     writeln!(file, "{body}")
-        .map_err(|error| format!("Unable to append {}: {error}", path.display()))
+        .map_err(|error| format!("Unable to append {}: {error}", path.display()))?;
+    file.flush()
+        .map_err(|error| format!("Unable to flush {}: {error}", path.display()))?;
+    file.sync_data()
+        .map_err(|error| format!("Unable to sync {}: {error}", path.display()))
 }
 
 pub fn list_markdown_files(root: &Path) -> Result<Vec<PathBuf>, String> {

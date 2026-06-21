@@ -2,7 +2,6 @@ use std::fs;
 use std::fs::OpenOptions;
 use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -42,11 +41,7 @@ pub struct ProposalMutationResultRecord {
 // ── ID generation ───────────────────────────────────────────────────────────
 
 pub fn next_id(prefix: &str) -> Result<String, String> {
-    let micros = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map_err(|e| format!("System time error: {e}"))?
-        .as_micros();
-    Ok(format!("{prefix}_{micros}"))
+    Ok(margent_core::id::new_id(prefix))
 }
 
 // ── Timestamp ───────────────────────────────────────────────────────────────
@@ -129,6 +124,28 @@ pub fn read_json<T: serde::de::DeserializeOwned>(path: &Path) -> Result<Option<T
         .map_err(|e| format!("Unable to parse {}: {e}", path.display()))
 }
 
+fn read_json_from_scan<T: serde::de::DeserializeOwned>(
+    path: &Path,
+    sidecar_kind: &str,
+) -> Result<Option<T>, String> {
+    let text = match fs::read_to_string(path) {
+        Ok(text) => text,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(format!("Unable to read {}: {error}", path.display())),
+    };
+
+    match serde_json::from_str(&text) {
+        Ok(record) => Ok(Some(record)),
+        Err(error) => {
+            eprintln!(
+                "Warning: skipping corrupt {sidecar_kind} sidecar {}: {error}",
+                path.display()
+            );
+            Ok(None)
+        }
+    }
+}
+
 pub fn write_json<T: serde::Serialize>(path: &Path, value: &T) -> Result<(), String> {
     let body = serde_json::to_string_pretty(value)
         .map_err(|e| format!("Unable to serialize {}: {e}", path.display()))?;
@@ -136,18 +153,7 @@ pub fn write_json<T: serde::Serialize>(path: &Path, value: &T) -> Result<(), Str
 }
 
 pub fn write_string_atomic(path: &Path, body: &str) -> Result<(), String> {
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)
-            .map_err(|e| format!("Unable to create {}: {e}", parent.display()))?;
-    }
-    let nonce = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_nanos();
-    let fname = path.file_name().and_then(|v| v.to_str()).unwrap_or("tmp");
-    let tmp = path.with_file_name(format!(".{fname}.{nonce}.tmp"));
-    fs::write(&tmp, body).map_err(|e| format!("Unable to write {}: {e}", tmp.display()))?;
-    fs::rename(&tmp, path).map_err(|e| format!("Unable to rename {}: {e}", path.display()))
+    margent_core::io::write_string_atomic(path, body)
 }
 
 pub fn append_ndjson<T: serde::Serialize>(path: &Path, value: &T) -> Result<(), String> {
@@ -162,7 +168,11 @@ pub fn append_ndjson<T: serde::Serialize>(path: &Path, value: &T) -> Result<(), 
         .create(true)
         .open(path)
         .map_err(|e| format!("Unable to open {}: {e}", path.display()))?;
-    writeln!(file, "{line}").map_err(|e| format!("Unable to append to {}: {e}", path.display()))
+    writeln!(file, "{line}").map_err(|e| format!("Unable to append to {}: {e}", path.display()))?;
+    file.flush()
+        .map_err(|e| format!("Unable to flush {}: {e}", path.display()))?;
+    file.sync_data()
+        .map_err(|e| format!("Unable to sync {}: {e}", path.display()))
 }
 
 // ── Document helpers ────────────────────────────────────────────────────────
@@ -440,7 +450,7 @@ fn remove_document_record(root: &Path, document_id: &str) -> Result<(), String> 
 fn remove_document_sidecars(root: &Path, document_id: &str) -> Result<(), String> {
     let md = ensure_workspace_layout(root)?;
     for path in json_files_in_directory(&md.join("threads"))? {
-        let Some(thread) = read_json::<ThreadRecord>(&path)? else {
+        let Some(thread) = read_json_from_scan::<ThreadRecord>(&path, "thread")? else {
             continue;
         };
         if thread.document_id == document_id {
@@ -448,7 +458,7 @@ fn remove_document_sidecars(root: &Path, document_id: &str) -> Result<(), String
         }
     }
     for path in json_files_in_directory(&md.join("proposals"))? {
-        let Some(proposal) = read_json::<ProposalRecord>(&path)? else {
+        let Some(proposal) = read_json_from_scan::<ProposalRecord>(&path, "proposal")? else {
             continue;
         };
         if proposal.document_id == document_id {
@@ -462,7 +472,7 @@ fn retarget_document_sidecars(root: &Path, from_id: &str, to_id: &str) -> Result
     let md = ensure_workspace_layout(root)?;
     let now = now_rfc3339()?;
     for path in json_files_in_directory(&md.join("threads"))? {
-        let Some(mut thread) = read_json::<ThreadRecord>(&path)? else {
+        let Some(mut thread) = read_json_from_scan::<ThreadRecord>(&path, "thread")? else {
             continue;
         };
         if thread.document_id == from_id {
@@ -472,7 +482,7 @@ fn retarget_document_sidecars(root: &Path, from_id: &str, to_id: &str) -> Result
         }
     }
     for path in json_files_in_directory(&md.join("proposals"))? {
-        let Some(mut proposal) = read_json::<ProposalRecord>(&path)? else {
+        let Some(mut proposal) = read_json_from_scan::<ProposalRecord>(&path, "proposal")? else {
             continue;
         };
         if proposal.document_id == from_id {
@@ -524,7 +534,7 @@ pub fn load_threads_sorted(root: &Path, document_id: &str) -> Result<Vec<ThreadR
         if !path.is_file() {
             continue;
         }
-        if let Some(thread) = read_json::<ThreadRecord>(&path)? {
+        if let Some(thread) = read_json_from_scan::<ThreadRecord>(&path, "thread")? {
             let thread = normalize_thread_record(thread);
             if thread.document_id == document_id {
                 threads.push(thread);
@@ -549,7 +559,7 @@ pub fn load_all_threads_sorted(root: &Path) -> Result<Vec<ThreadRecord>, String>
         if !path.is_file() {
             continue;
         }
-        if let Some(thread) = read_json::<ThreadRecord>(&path)? {
+        if let Some(thread) = read_json_from_scan::<ThreadRecord>(&path, "thread")? {
             threads.push(normalize_thread_record(thread));
         }
     }
@@ -589,7 +599,7 @@ pub fn migrate_legacy_thread_records(root: &Path) -> Result<(usize, usize), Stri
             continue;
         }
 
-        let Some(thread) = read_json::<ThreadRecord>(&path)? else {
+        let Some(thread) = read_json_from_scan::<ThreadRecord>(&path, "thread")? else {
             continue;
         };
 
@@ -607,7 +617,9 @@ pub fn migrate_legacy_thread_records(root: &Path) -> Result<(usize, usize), Stri
 }
 
 fn normalize_thread_record(mut normalized: ThreadRecord) -> ThreadRecord {
-    normalized.schema_version = CURRENT_THREAD_SCHEMA_VERSION;
+    if normalized.schema_version < CURRENT_THREAD_SCHEMA_VERSION {
+        normalized.schema_version = CURRENT_THREAD_SCHEMA_VERSION;
+    }
     if normalized.anchor.kind.trim().is_empty() {
         normalized.anchor.kind = "text_span".into();
     }
@@ -621,7 +633,7 @@ fn normalize_thread_record(mut normalized: ThreadRecord) -> ThreadRecord {
 }
 
 fn thread_needs_migration(thread: &ThreadRecord) -> bool {
-    thread.schema_version != CURRENT_THREAD_SCHEMA_VERSION
+    thread.schema_version < CURRENT_THREAD_SCHEMA_VERSION
         || thread.anchor.kind.trim().is_empty()
         || thread.created_content_hash.is_none()
         || thread.last_reanchor_content_hash.is_none()
@@ -806,6 +818,7 @@ pub fn create_thread(
         }],
         linked_proposal_ids: Vec::new(),
         provider_sessions: std::collections::HashMap::new(),
+        extra: Default::default(),
     };
 
     save_thread(root, &thread)?;
@@ -989,7 +1002,7 @@ pub fn load_all_documents(root: &Path) -> Result<Vec<DocumentRecord>, String> {
         if !path.is_file() {
             continue;
         }
-        if let Some(doc) = read_json::<DocumentRecord>(&path)? {
+        if let Some(doc) = read_json_from_scan::<DocumentRecord>(&path, "document")? {
             docs.push(doc);
         }
     }
@@ -1023,7 +1036,7 @@ pub fn load_all_proposals(root: &Path) -> Result<Vec<ProposalRecord>, String> {
         if !path.is_file() {
             continue;
         }
-        if let Some(p) = read_json::<ProposalRecord>(&path)? {
+        if let Some(p) = read_json_from_scan::<ProposalRecord>(&path, "proposal")? {
             proposals.push(p);
         }
     }
@@ -1120,6 +1133,7 @@ pub fn accept_proposal(
         Some(&proposal.id),
         None,
     )?;
+    resolve_threads_for_acceptance(root, &proposal.resolve_thread_ids)?;
     refresh_pending_proposals_for_document(root, &proposal.document_id, Some(&proposal.id))?;
 
     Ok(ProposalMutationResultRecord {
@@ -1183,6 +1197,21 @@ pub fn record_authorship_for_acceptance(
     }
     write_json(&path, &record)?;
     Ok(new_span_count)
+}
+
+fn resolve_threads_for_acceptance(root: &Path, thread_ids: &[String]) -> Result<(), String> {
+    for thread_id in thread_ids {
+        match load_thread(root, thread_id) {
+            Ok(thread) if thread.status == "resolved" => {}
+            Ok(_) => {
+                resolve_thread(root, thread_id)?;
+            }
+            Err(error) if error.contains("not found") => {}
+            Err(error) => return Err(error),
+        }
+    }
+
+    Ok(())
 }
 
 pub fn reject_proposal(
@@ -1280,7 +1309,8 @@ fn load_latest_snapshot(
     let snapshots_dir = md.join("snapshots");
     let mut snapshots = Vec::new();
     for path in json_files_in_directory(&snapshots_dir)? {
-        let Some(snapshot) = read_json::<DocumentSnapshotRecord>(&path)? else {
+        let Some(snapshot) = read_json_from_scan::<DocumentSnapshotRecord>(&path, "snapshot")?
+        else {
             continue;
         };
         if relative_path.is_none_or(|path| snapshot.relative_path == path) {
@@ -1387,14 +1417,19 @@ pub fn load_events(root: &Path) -> Result<Vec<EventRecord>, String> {
     }
     let text = fs::read_to_string(&path).map_err(|e| format!("Unable to read events: {e}"))?;
     let mut events = Vec::new();
-    for line in text.lines() {
+    for (line_index, line) in text.lines().enumerate() {
         let trimmed = line.trim();
         if trimmed.is_empty() {
             continue;
         }
-        let evt: EventRecord = serde_json::from_str(trimmed)
-            .map_err(|e| format!("Unable to parse event line: {e}"))?;
-        events.push(evt);
+        match serde_json::from_str(trimmed) {
+            Ok(evt) => events.push(evt),
+            Err(error) => eprintln!(
+                "Warning: skipping malformed event line {} in {}: {error}",
+                line_index + 1,
+                path.display()
+            ),
+        }
     }
     Ok(events)
 }
@@ -1785,6 +1820,37 @@ mod tests {
         std::env::temp_dir().join(format!("{prefix}-{}", next_id("test").unwrap()))
     }
 
+    fn pending_updated_document_proposal(
+        id: &str,
+        document: &DocumentRecord,
+        updated_document_text: &str,
+        thread_ids: Vec<String>,
+        resolve_thread_ids: Vec<String>,
+    ) -> ProposalRecord {
+        ProposalRecord {
+            schema_version: 1,
+            id: id.into(),
+            document_id: document.id.clone(),
+            thread_ids,
+            adapter_id: "test".into(),
+            created_at: "2026-06-11T00:00:00Z".into(),
+            updated_at: "2026-06-11T00:00:00Z".into(),
+            status: "pending".into(),
+            base_content_hash: document.current_content_hash.clone(),
+            response_mode: "updated_document".into(),
+            summary: "Update proposal".into(),
+            assistant_message: "Change the document.".into(),
+            updated_document_text: Some(updated_document_text.into()),
+            unified_diff: None,
+            computed_diff: String::new(),
+            warnings: Vec::new(),
+            resolve_thread_ids,
+            stderr: None,
+            error_message: None,
+            extra: Default::default(),
+        }
+    }
+
     #[test]
     fn create_reply_delete_and_resolve_thread_round_trip() {
         let root = unique_temp_dir("margent-cli-workspace");
@@ -1884,6 +1950,127 @@ mod tests {
         .expect("create document thread");
 
         assert!(thread.tags.contains(&"document".to_string()));
+
+        fs::remove_dir_all(&root).expect("cleanup temp root");
+    }
+
+    #[test]
+    fn load_all_threads_sorted_skips_corrupt_sibling_sidecar() {
+        let root = unique_temp_dir("margent-cli-corrupt-thread-sibling");
+        fs::create_dir_all(&root).expect("create temp root");
+
+        let document_path = root.join("draft.md");
+        fs::write(&document_path, "# Draft\n\nHello world.\n").expect("write doc");
+        let md = ensure_workspace_layout(&root).expect("init layout");
+        let content = fs::read_to_string(&document_path).expect("read doc");
+        let document = upsert_document_record(&root, "draft.md", &content).expect("index doc");
+        let anchor =
+            build_anchor_from_quote(&document, &content, "world", 1).expect("build anchor");
+        let thread = create_thread(
+            &root,
+            &document,
+            "World",
+            "Tighten this phrase.",
+            anchor,
+            "user",
+            "user",
+            "You",
+            None,
+        )
+        .expect("create thread");
+        fs::write(
+            md.join("threads").join("thread_corrupt.json"),
+            "{ not valid json",
+        )
+        .expect("write corrupt thread");
+
+        let threads = load_all_threads_sorted(&root).expect("load threads");
+
+        assert_eq!(threads.len(), 1);
+        assert_eq!(threads[0].id, thread.id);
+
+        fs::remove_dir_all(&root).expect("cleanup temp root");
+    }
+
+    #[test]
+    fn load_all_documents_skips_corrupt_sibling_sidecar() {
+        let root = unique_temp_dir("margent-cli-corrupt-document-sibling");
+        fs::create_dir_all(&root).expect("create temp root");
+
+        let document_path = root.join("draft.md");
+        fs::write(&document_path, "# Draft\n\nHello world.\n").expect("write doc");
+        let md = ensure_workspace_layout(&root).expect("init layout");
+        let content = fs::read_to_string(&document_path).expect("read doc");
+        let document = upsert_document_record(&root, "draft.md", &content).expect("index doc");
+        fs::write(
+            md.join("documents").join("doc_corrupt.json"),
+            "{ not valid json",
+        )
+        .expect("write corrupt document");
+
+        let documents = load_all_documents(&root).expect("load documents");
+
+        assert_eq!(documents.len(), 1);
+        assert_eq!(documents[0].id, document.id);
+
+        fs::remove_dir_all(&root).expect("cleanup temp root");
+    }
+
+    #[test]
+    fn load_all_proposals_skips_corrupt_sibling_sidecar() {
+        let root = unique_temp_dir("margent-cli-corrupt-proposal-sibling");
+        fs::create_dir_all(&root).expect("create temp root");
+
+        let document_path = root.join("draft.md");
+        fs::write(&document_path, "# Draft\n\nHello world.\n").expect("write doc");
+        let md = ensure_workspace_layout(&root).expect("init layout");
+        let content = fs::read_to_string(&document_path).expect("read doc");
+        let document = upsert_document_record(&root, "draft.md", &content).expect("index doc");
+        let proposal = pending_updated_document_proposal(
+            "proposal_valid",
+            &document,
+            "# Draft\n\nHello brave world.\n",
+            Vec::new(),
+            Vec::new(),
+        );
+        save_proposal(&root, &proposal).expect("save proposal");
+        fs::write(
+            md.join("proposals").join("proposal_corrupt.json"),
+            "{ not valid json",
+        )
+        .expect("write corrupt proposal");
+
+        let proposals = load_all_proposals(&root).expect("load proposals");
+
+        assert_eq!(proposals.len(), 1);
+        assert_eq!(proposals[0].id, proposal.id);
+
+        fs::remove_dir_all(&root).expect("cleanup temp root");
+    }
+
+    #[test]
+    fn load_events_skips_malformed_lines() {
+        let root = unique_temp_dir("margent-cli-corrupt-events");
+        fs::create_dir_all(&root).expect("create temp root");
+        let md = ensure_workspace_layout(&root).expect("init layout");
+        let events_path = md.join("events.ndjson");
+
+        fs::write(
+            &events_path,
+            [
+                r#"{"id":"event_1","timestamp":"2026-03-20T12:00:00Z","eventType":"thread.created","threadId":"thread_1"}"#,
+                "{ not valid json",
+                r#"{"id":"event_2","timestamp":"2026-03-20T12:01:00Z","eventType":"thread.resolved","threadId":"thread_1"}"#,
+            ]
+            .join("\n"),
+        )
+        .expect("write event log");
+
+        let events = load_events(&root).expect("load events");
+
+        assert_eq!(events.len(), 2);
+        assert_eq!(events[0].id, "event_1");
+        assert_eq!(events[1].id, "event_2");
 
         fs::remove_dir_all(&root).expect("cleanup temp root");
     }
@@ -2045,6 +2232,7 @@ mod tests {
             messages: Vec::new(),
             linked_proposal_ids: Vec::new(),
             provider_sessions: std::collections::HashMap::new(),
+            extra: Default::default(),
         };
         save_thread(&root, &current_thread).expect("save current thread");
 
@@ -2067,6 +2255,70 @@ mod tests {
             CURRENT_THREAD_SCHEMA_VERSION
         );
         assert_eq!(persisted_current.anchor.kind, "text_span");
+
+        fs::remove_dir_all(&root).expect("cleanup temp root");
+    }
+
+    #[test]
+    fn migrate_thread_records_does_not_downgrade_future_schema_threads() {
+        let root = unique_temp_dir("margent-cli-migrate-future");
+        fs::create_dir_all(&root).expect("create temp root");
+
+        let md = ensure_workspace_layout(&root).expect("init layout");
+        let future_thread_id = "thread_future";
+        let future_path = md.join("threads").join(format!("{future_thread_id}.json"));
+        let future_schema_version = CURRENT_THREAD_SCHEMA_VERSION + 1;
+
+        fs::write(
+            &future_path,
+            serde_json::to_string_pretty(&serde_json::json!({
+                "schemaVersion": future_schema_version,
+                "id": future_thread_id,
+                "documentId": "doc_future",
+                "status": "open",
+                "createdAt": "2026-03-20T12:00:00Z",
+                "updatedAt": "2026-03-20T12:00:00Z",
+                "createdBy": "user",
+                "title": "Future thread",
+                "tags": [],
+                "anchor": {
+                    "quote": "future",
+                    "prefixContext": "",
+                    "suffixContext": "",
+                    "startOffsetUtf16": 0,
+                    "endOffsetUtf16": 6,
+                    "startLine": 1,
+                    "startColumn": 1,
+                    "endLine": 1,
+                    "endColumn": 7,
+                    "headingPath": [],
+                    "blockFingerprint": "sha256:future",
+                    "baseContentHash": "sha256:future",
+                    "kind": "text_span",
+                    "state": "attached",
+                    "confidence": 1.0
+                },
+                "createdContentHash": "sha256:future",
+                "lastReanchorContentHash": "sha256:future",
+                "messages": [],
+                "linkedProposalIds": [],
+                "futureField": {"kept": true}
+            }))
+            .expect("serialize future thread"),
+        )
+        .expect("write future thread");
+
+        let (total, migrated) =
+            migrate_legacy_thread_records(&root).expect("migrate legacy thread records");
+
+        assert_eq!(total, 1);
+        assert_eq!(migrated, 0);
+
+        let persisted: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(&future_path).expect("read future thread"))
+                .expect("parse future thread");
+        assert_eq!(persisted["schemaVersion"], future_schema_version);
+        assert_eq!(persisted["futureField"], serde_json::json!({"kept": true}));
 
         fs::remove_dir_all(&root).expect("cleanup temp root");
     }
@@ -2123,6 +2375,7 @@ mod tests {
             resolve_thread_ids: Vec::new(),
             stderr: None,
             error_message: None,
+            extra: Default::default(),
         };
         save_proposal(&root, &proposal).expect("save proposal");
 
@@ -2148,6 +2401,114 @@ mod tests {
             authorship.spans[0].source.agent_id.as_deref(),
             Some("codex")
         );
+
+        fs::remove_dir_all(&root).expect("cleanup temp root");
+    }
+
+    #[test]
+    fn accept_proposal_creates_snapshot_of_previous_document() {
+        let root = unique_temp_dir("margent-cli-accept-snapshot");
+        fs::create_dir_all(&root).expect("create temp root");
+
+        let before = "Hello world\nSecond line\n";
+        let updated = "Hello brave world\nSecond line\n";
+        let document_path = root.join("draft.md");
+        fs::write(&document_path, before).expect("write doc");
+        ensure_workspace_layout(&root).expect("init layout");
+        let document = upsert_document_record(&root, "draft.md", before).expect("index doc");
+        let mut proposal = pending_updated_document_proposal(
+            "proposal_snapshot",
+            &document,
+            updated,
+            vec![],
+            vec![],
+        );
+        proposal.computed_diff = compute_unified_diff(before, updated);
+        save_proposal(&root, &proposal).expect("save proposal");
+
+        let result = accept_proposal(&root, &proposal.id, None).expect("accept proposal");
+
+        assert_eq!(result.proposal.status, "accepted");
+        let updated_hash = content_hash(updated);
+        assert_eq!(
+            result
+                .document
+                .as_ref()
+                .map(|document| document.current_content_hash.as_str()),
+            Some(updated_hash.as_str())
+        );
+        assert_eq!(
+            fs::read_to_string(&document_path).expect("read accepted doc"),
+            updated
+        );
+
+        let snapshot = result.snapshot.expect("accept returns snapshot");
+        assert_eq!(snapshot.document_id, document.id);
+        assert_eq!(snapshot.relative_path, "draft.md");
+        assert_eq!(snapshot.content, before);
+        assert_eq!(snapshot.content_hash, content_hash(before));
+        assert_eq!(snapshot.reason, "proposal.accept");
+        assert_eq!(snapshot.proposal_id.as_deref(), Some(proposal.id.as_str()));
+
+        let persisted_snapshot_path = root
+            .join(".mdreview")
+            .join("snapshots")
+            .join(format!("{}.json", snapshot.id));
+        let persisted_snapshot = read_json::<DocumentSnapshotRecord>(&persisted_snapshot_path)
+            .expect("read persisted snapshot")
+            .expect("persisted snapshot");
+        assert_eq!(persisted_snapshot.id, snapshot.id);
+        assert_eq!(persisted_snapshot.content, before);
+
+        fs::remove_dir_all(&root).expect("cleanup temp root");
+    }
+
+    #[test]
+    fn accept_proposal_resolves_resolve_thread_ids() {
+        let root = unique_temp_dir("margent-cli-resolve-thread");
+        fs::create_dir_all(&root).expect("create temp root");
+
+        let before = "# Draft\n\nHello world.\n";
+        let updated = "# Draft\n\nHello brave world.\n";
+        let document_path = root.join("draft.md");
+        fs::write(&document_path, before).expect("write doc");
+        ensure_workspace_layout(&root).expect("init layout");
+        let document = upsert_document_record(&root, "draft.md", before).expect("index doc");
+        let anchor = build_anchor_from_quote(&document, before, "world", 1).expect("build anchor");
+        let thread = create_thread(
+            &root,
+            &document,
+            "World",
+            "Make this less generic.",
+            anchor,
+            "user",
+            "user",
+            "You",
+            None,
+        )
+        .expect("create thread");
+        let proposal = pending_updated_document_proposal(
+            "proposal_deferred_resolve",
+            &document,
+            updated,
+            vec![thread.id.clone()],
+            vec![thread.id.clone(), "thread_missing".into()],
+        );
+        save_proposal(&root, &proposal).expect("save proposal");
+
+        let result = accept_proposal(&root, &proposal.id, None).expect("accept proposal");
+
+        assert_eq!(result.proposal.status, "accepted");
+        assert_eq!(
+            result.proposal.resolve_thread_ids,
+            vec![thread.id.clone(), "thread_missing".into()]
+        );
+        assert_eq!(
+            fs::read_to_string(&document_path).expect("read accepted doc"),
+            updated
+        );
+        let resolved_thread = load_thread(&root, &thread.id).expect("load thread");
+        assert_eq!(resolved_thread.status, "resolved");
 
         fs::remove_dir_all(&root).expect("cleanup temp root");
     }
@@ -2218,6 +2579,7 @@ mod tests {
             resolve_thread_ids: Vec::new(),
             stderr: None,
             error_message: None,
+            extra: Default::default(),
         };
         save_proposal(&root, &proposal).expect("save proposal");
         save_document(&root, "draft.md", "Human edit first.\n").expect("change document");
@@ -2236,6 +2598,10 @@ mod tests {
             fs::read_to_string(&document_path).expect("read unchanged doc"),
             "Human edit first.\n"
         );
+        let snapshot_count = fs::read_dir(root.join(".mdreview").join("snapshots"))
+            .expect("read snapshots")
+            .count();
+        assert_eq!(snapshot_count, 0);
 
         fs::remove_dir_all(&root).expect("cleanup temp root");
     }

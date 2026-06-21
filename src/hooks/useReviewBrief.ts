@@ -27,6 +27,7 @@ export function useReviewBrief({
   const [isLoading, setIsLoading] = useState(false);
   const [proposals, setProposals] = useState<ProposalRecord[]>([]);
   const [threads, setThreads] = useState<ThreadRecord[]>([]);
+  const workspaceRoot = workspace?.rootPath ?? null;
 
   const entries = useMemo(
     () => buildReviewBriefEntries(workspace?.documents ?? [], threads, proposals),
@@ -38,7 +39,7 @@ export function useReviewBrief({
   );
 
   const loadBrief = useCallback(async () => {
-    if (!workspace) {
+    if (!workspaceRoot) {
       setThreads([]);
       setProposals([]);
       return;
@@ -50,10 +51,10 @@ export function useReviewBrief({
     try {
       const [nextThreads, nextProposals] = await Promise.all([
         invokeBackend<ThreadRecord[]>("load_all_threads", {
-          workspaceRoot: workspace.rootPath,
+          workspaceRoot,
         }),
         invokeBackend<ProposalRecord[]>("load_all_proposals", {
-          workspaceRoot: workspace.rootPath,
+          workspaceRoot,
         }),
       ]);
       setThreads(nextThreads);
@@ -63,7 +64,7 @@ export function useReviewBrief({
     } finally {
       setIsLoading(false);
     }
-  }, [workspace]);
+  }, [workspaceRoot]);
 
   useEffect(() => {
     void loadBrief();

@@ -17,9 +17,38 @@ export interface DocumentSummary {
   headingIndex: HeadingIndexEntry[];
 }
 
+export interface DocumentVersion {
+  contentHash: string;
+  modifiedNs?: string | null;
+  size: number;
+}
+
 export interface DocumentPayload extends DocumentSummary {
   absolutePath: string;
   content: string;
+  version: DocumentVersion;
+}
+
+export type SaveDocumentIfCurrentResult =
+  | {
+      status: "saved";
+      document: DocumentPayload;
+      operationId: string;
+    }
+  | {
+      status: "conflict";
+      expectedVersion: DocumentVersion;
+      actualVersion: DocumentVersion;
+      operationId: string;
+    };
+
+export interface SaveConflict {
+  actualVersion: DocumentVersion;
+  diskDocument: DocumentPayload;
+  expectedVersion: DocumentVersion;
+  localContent: string;
+  operationId: string;
+  relativePath: string;
 }
 
 export interface WorkspaceSnapshot {

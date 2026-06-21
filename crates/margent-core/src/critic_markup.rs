@@ -415,6 +415,7 @@ mod tests {
             }],
             linked_proposal_ids: Vec::new(),
             provider_sessions: HashMap::new(),
+            extra: Default::default(),
         }
     }
 

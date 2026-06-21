@@ -1,6 +1,7 @@
 pub mod adapter_service;
 pub mod agent_service;
 pub mod anchor_service;
+pub mod diff_service;
 pub mod export_service;
 pub mod file_service;
 pub mod open_request_service;

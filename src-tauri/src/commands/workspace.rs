@@ -1,4 +1,4 @@
-use crate::models::document::DocumentPayload;
+use crate::models::document::{DocumentPayload, DocumentVersion, SaveDocumentIfCurrentResult};
 use crate::models::workspace::{WorkspaceOpenRequest, WorkspaceSnapshot};
 use crate::services::{open_request_service::PendingOpenRequestQueue, workspace_service};
 use tauri::State;
@@ -70,6 +70,23 @@ pub fn save_document(
     content: String,
 ) -> Result<DocumentPayload, String> {
     workspace_service::save_document(&workspace_root, &relative_path, &content)
+}
+
+#[tauri::command]
+pub fn save_document_if_current(
+    workspace_root: String,
+    relative_path: String,
+    content: String,
+    expected_version: DocumentVersion,
+    operation_id: String,
+) -> Result<SaveDocumentIfCurrentResult, String> {
+    workspace_service::save_document_if_current(
+        &workspace_root,
+        &relative_path,
+        &content,
+        &expected_version,
+        &operation_id,
+    )
 }
 
 #[tauri::command]

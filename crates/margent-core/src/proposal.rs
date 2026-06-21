@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use serde_json::{Map, Value};
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -22,4 +23,50 @@ pub struct ProposalRecord {
     pub resolve_thread_ids: Vec<String>,
     pub stderr: Option<String>,
     pub error_message: Option<String>,
+    #[serde(default, flatten, skip_serializing_if = "Map::is_empty")]
+    pub extra: Map<String, Value>,
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use super::*;
+
+    #[test]
+    fn proposal_record_preserves_unknown_fields_on_round_trip() {
+        let record: ProposalRecord = serde_json::from_value(json!({
+            "schemaVersion": 2,
+            "id": "proposal_future",
+            "documentId": "doc_future",
+            "threadIds": [],
+            "adapterId": "codex",
+            "createdAt": "2026-06-20T00:00:00Z",
+            "updatedAt": "2026-06-20T00:00:00Z",
+            "status": "pending",
+            "baseContentHash": "sha256:future",
+            "responseMode": "updated_document",
+            "summary": "Future proposal",
+            "assistantMessage": "Future assistant message",
+            "updatedDocumentText": "Updated",
+            "unifiedDiff": null,
+            "computedDiff": "",
+            "warnings": [],
+            "resolveThreadIds": [],
+            "stderr": null,
+            "errorMessage": null,
+            "futureField": {"kept": true}
+        }))
+        .expect("parse future proposal");
+
+        assert_eq!(record.schema_version, 2);
+        assert_eq!(
+            record.extra.get("futureField"),
+            Some(&json!({"kept": true}))
+        );
+
+        let serialized = serde_json::to_value(&record).expect("serialize proposal");
+        assert_eq!(serialized["futureField"], json!({"kept": true}));
+        assert_eq!(serialized["schemaVersion"], json!(2));
+    }
 }
