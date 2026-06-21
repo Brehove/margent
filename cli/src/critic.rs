@@ -1,10 +1,10 @@
 use std::path::{Path, PathBuf};
 
+use margent_core::change_set::compute_unified_diff;
 use margent_core::critic_markup::{parse_critic_markup, render_critic_markup};
 use margent_core::proposal::ProposalRecord;
 use margent_core::thread::AnchorRecord;
 use serde::Serialize;
-use similar::TextDiff;
 
 use crate::models::{DocumentRecord, ThreadRecord};
 use crate::workspace;
@@ -321,14 +321,6 @@ fn truncate_title(value: &str) -> String {
     }
     let truncated = value.chars().take(69).collect::<String>();
     format!("{truncated}...")
-}
-
-fn compute_unified_diff(before: &str, after: &str) -> String {
-    TextDiff::from_lines(before, after)
-        .unified_diff()
-        .context_radius(2)
-        .header("before", "after")
-        .to_string()
 }
 
 #[cfg(test)]

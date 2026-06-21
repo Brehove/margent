@@ -3,9 +3,9 @@ use std::env;
 use std::io::{self, BufRead, Write};
 use std::path::{Path, PathBuf};
 
+use margent_core::change_set::compute_unified_diff;
 use margent_core::deep_link::thread_deep_link;
 use serde_json::{json, Value};
-use similar::TextDiff;
 
 use crate::anchor_service;
 use crate::models::{ProposalRecord, ThreadRecord};
@@ -728,14 +728,6 @@ fn agent_identity(args: &Value) -> (String, String) {
     let agent_id = optional_string(args, "agentId").unwrap_or_else(|| "mcp".into());
     let author_name = optional_string(args, "authorName").unwrap_or_else(|| "Margent MCP".into());
     (agent_id, author_name)
-}
-
-fn compute_unified_diff(before: &str, after: &str) -> String {
-    TextDiff::from_lines(before, after)
-        .unified_diff()
-        .context_radius(2)
-        .header("before", "after")
-        .to_string()
 }
 
 fn increment_stat(stats: &mut Value, key: &str) {

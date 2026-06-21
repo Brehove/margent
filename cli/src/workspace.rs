@@ -3,9 +3,9 @@ use std::fs::OpenOptions;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
+use margent_core::change_set::compute_unified_diff;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use similar::TextDiff;
 use time::format_description::well_known::Rfc3339;
 use time::OffsetDateTime;
 use walkdir::WalkDir;
@@ -1054,14 +1054,6 @@ pub fn save_proposal(root: &Path, proposal: &ProposalRecord) -> Result<(), Strin
     let md = ensure_workspace_layout(root)?;
     let path = md.join("proposals").join(format!("{}.json", proposal.id));
     write_json(&path, proposal)
-}
-
-fn compute_unified_diff(before: &str, after: &str) -> String {
-    TextDiff::from_lines(before, after)
-        .unified_diff()
-        .context_radius(2)
-        .header("before", "after")
-        .to_string()
 }
 
 pub fn accept_proposal(
