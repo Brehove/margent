@@ -15,7 +15,7 @@ const listenMock = vi.mocked(listen);
 const watchMock = vi.mocked(watch);
 
 function makeDocument(overrides: Partial<DocumentPayload> = {}): DocumentPayload {
-  return {
+  const document = {
     schemaVersion: 1,
     id: "doc-1",
     relativePath: "brainstorming/claw-psychosis.md",
@@ -31,6 +31,15 @@ function makeDocument(overrides: Partial<DocumentPayload> = {}): DocumentPayload
     headingIndex: [],
     content: "# Open Request Test\n\nAlpha beta gamma.\n",
     ...overrides,
+  };
+
+  return {
+    ...document,
+    version: document.version ?? {
+      contentHash: document.currentContentHash,
+      modifiedNs: null,
+      size: new TextEncoder().encode(document.content).length,
+    },
   };
 }
 

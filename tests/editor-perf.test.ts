@@ -8,6 +8,8 @@ import {
   buildThreadPresentation,
   mapThreadPresentation,
 } from "../src/components/editor/useCodeMirror";
+import { buildProposalReviewDecorationSet } from "../src/components/editor/cm/proposalReviewExtension";
+import type { ReviewChangeSet, ReviewHunk } from "../src/types/proposal";
 import {
   createFootnoteHeavyScenario,
   createLargePlainDocument,
@@ -26,6 +28,8 @@ describe("editor perf report", () => {
     const largePlain = createLargePlainDocument();
     const manyThread = createManyThreadScenario();
     const footnoteHeavy = createFootnoteHeavyScenario();
+    const oneHundredHunks = createProposalHunkScenario(100);
+    const fiveHundredHunks = createProposalHunkScenario(500);
 
     const markdownExtensions = [markdown()];
     const largePlainState = EditorState.create({ doc: largePlain, extensions: markdownExtensions });
@@ -36,6 +40,14 @@ describe("editor perf report", () => {
     const manyThreadPresentation = buildThreadPresentation(manyThread.threads, manyThreadState);
     const footnoteState = EditorState.create({
       doc: footnoteHeavy.content,
+      extensions: markdownExtensions,
+    });
+    const oneHundredHunkState = EditorState.create({
+      doc: oneHundredHunks.content,
+      extensions: markdownExtensions,
+    });
+    const fiveHundredHunkState = EditorState.create({
+      doc: fiveHundredHunks.content,
       extensions: markdownExtensions,
     });
 
@@ -147,6 +159,26 @@ describe("editor perf report", () => {
           "rendered",
         );
       }),
+      runMeasured("buildProposalReviewDecorations 100 hunks", 24, () => {
+        buildProposalReviewDecorationSet(
+          {
+            activeHunkId: oneHundredHunks.changeSet.hunks[0]?.id ?? null,
+            changeSet: oneHundredHunks.changeSet,
+            selectedHunkIds: oneHundredHunks.changeSet.hunks.map((hunk) => hunk.id),
+          },
+          oneHundredHunkState,
+        );
+      }),
+      runMeasured("buildProposalReviewDecorations 500 hunks", 12, () => {
+        buildProposalReviewDecorationSet(
+          {
+            activeHunkId: fiveHundredHunks.changeSet.hunks[0]?.id ?? null,
+            changeSet: fiveHundredHunks.changeSet,
+            selectedHunkIds: fiveHundredHunks.changeSet.hunks.map((hunk) => hunk.id),
+          },
+          fiveHundredHunkState,
+        );
+      }),
     ];
 
     console.log(
@@ -158,6 +190,8 @@ describe("editor perf report", () => {
           largePlainChars: largePlain.length,
           manyThreadChars: manyThread.content.length,
           manyThreadThreads: manyThread.threads.length,
+          proposalHunksLarge: fiveHundredHunks.changeSet.hunks.length,
+          proposalHunksSmall: oneHundredHunks.changeSet.hunks.length,
         },
         null,
         2,
@@ -172,7 +206,7 @@ describe("editor perf report", () => {
       })),
     );
 
-    expect(reports).toHaveLength(11);
+    expect(reports).toHaveLength(13);
     for (const report of reports) {
       expect(Number.isFinite(report.medianMs)).toBe(true);
       expect(Number.isFinite(report.p95Ms)).toBe(true);
@@ -181,6 +215,51 @@ describe("editor perf report", () => {
     }
   }, 30_000);
 });
+
+function createProposalHunkScenario(hunkCount: number): {
+  changeSet: ReviewChangeSet;
+  content: string;
+} {
+  const lines = Array.from({ length: hunkCount }, (_value, index) => `line ${index + 1}`);
+  const content = `${lines.join("\n")}\n`;
+  const hunks: ReviewHunk[] = lines.map((line, index) => ({
+    afterText: `${line} revised\n`,
+    beforeText: `${line}\n`,
+    headingPath: [],
+    id: `hunk-${index + 1}`,
+    index,
+    kind: "replace",
+    newRange: {
+      endByte: 0,
+      endLine: index + 2,
+      startByte: 0,
+      startLine: index + 1,
+    },
+    oldRange: {
+      endByte: 0,
+      endLine: index + 2,
+      startByte: 0,
+      startLine: index + 1,
+    },
+    summary: null,
+  }));
+
+  return {
+    changeSet: {
+      afterHash: "sha256:after",
+      beforeHash: "sha256:before",
+      documentId: "doc-1",
+      hunks,
+      id: `change-set-${hunkCount}`,
+      source: {
+        id: "proposal-1",
+        kind: "proposal",
+      },
+      warnings: [],
+    },
+    content,
+  };
+}
 
 function runMeasured(
   label: string,

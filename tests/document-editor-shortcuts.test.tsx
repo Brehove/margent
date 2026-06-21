@@ -15,7 +15,7 @@ vi.mock("../src/components/editor/useCodeMirror", () => ({
 }));
 
 function makeDocumentPayload(overrides: Partial<DocumentPayload> = {}): DocumentPayload {
-  return {
+  const document = {
     absolutePath: "/workspace/README.md",
     content: "# Test\n",
     createdAt: "2026-01-01T00:00:00Z",
@@ -29,6 +29,15 @@ function makeDocumentPayload(overrides: Partial<DocumentPayload> = {}): Document
     updatedAt: "2026-01-01T00:00:00Z",
     wordCount: 2,
     ...overrides,
+  };
+
+  return {
+    ...document,
+    version: document.version ?? {
+      contentHash: document.currentContentHash,
+      modifiedNs: null,
+      size: new TextEncoder().encode(document.content).length,
+    },
   };
 }
 
@@ -424,7 +433,9 @@ describe("DocumentEditor keyboard shortcuts", () => {
       />,
     );
 
-    expect(session.replaceContent).toHaveBeenCalledWith("# Saved\n\nCurrent edit.\n");
+    expect(session.replaceContent).toHaveBeenCalledWith("# Saved\n\nCurrent edit.\n", {
+      preserveViewport: true,
+    });
   });
 
   it("opens editor search from the Find button", () => {
@@ -782,6 +793,45 @@ describe("DocumentEditor keyboard shortcuts", () => {
     expect(responseDetails).toHaveTextContent(
       "This is the full revision response with grammar notes, rationale",
     );
+  });
+
+  it("shows document proposals in the Changes tab", () => {
+    mockUseCodeMirror.mockReturnValue({
+      session: makeSession({ isDirty: vi.fn(() => false) }),
+      sessionMetrics: {
+        characterCount: 7,
+        lineCount: 2,
+      },
+      sessionSnapshot: {
+        isDirty: false,
+        revision: 0,
+      },
+      setHostElement: vi.fn(),
+    });
+
+    render(
+      <DocumentEditor
+        addReply={vi.fn(async () => {})}
+        createThreadFromSelection={vi.fn(async () => {})}
+        deleteThread={vi.fn(async () => {})}
+        document={makeDocumentPayload()}
+        isSaving={false}
+        isThreadSaving={false}
+        loadThread={vi.fn(async () => null)}
+        onDirtyChange={vi.fn()}
+        onSave={vi.fn()}
+        onThreadSelect={vi.fn()}
+        proposals={[makeProposal({ summary: "Tighten the introduction." })]}
+        reopenThread={vi.fn(async () => {})}
+        resolveThread={vi.fn(async () => {})}
+        threads={[]}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("tab", { name: "Changes" }));
+
+    expect(screen.getByText("Tighten the introduction.")).toBeInTheDocument();
+    expect(screen.getByText("1 proposal")).toBeInTheDocument();
   });
 
   it("uses one thread composer for comments and provider instructions", async () => {

@@ -5,6 +5,7 @@ use crate::document::content_hash;
 use crate::thread::AnchorRecord;
 
 pub const CURRENT_AUTHORSHIP_SCHEMA_VERSION: u8 = 1;
+const CHAR_LEVEL_AUTHORSHIP_DIFF_LIMIT_BYTES: usize = 24_000;
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -77,7 +78,11 @@ where
 }
 
 fn inserted_ranges(before: &str, after: &str) -> Vec<(usize, usize)> {
-    let diff = TextDiff::from_chars(before, after);
+    let diff = if before.len() + after.len() <= CHAR_LEVEL_AUTHORSHIP_DIFF_LIMIT_BYTES {
+        TextDiff::from_chars(before, after)
+    } else {
+        TextDiff::from_lines(before, after)
+    };
     let mut ranges = Vec::new();
     let mut after_offset = 0;
     let mut active_start: Option<usize> = None;
@@ -205,5 +210,27 @@ mod tests {
         );
 
         assert!(record.spans.is_empty());
+    }
+
+    #[test]
+    fn uses_line_level_spans_for_large_documents() {
+        let unchanged_prefix =
+            "Unchanged context that should not be part of the span.\n".repeat(260);
+        let unchanged_suffix = "More unchanged context after the revision.\n".repeat(260);
+        let before = format!("{unchanged_prefix}Original paragraph.\n{unchanged_suffix}");
+        let after = format!("{unchanged_prefix}Revised paragraph.\n{unchanged_suffix}");
+
+        let record = build_authorship_record(
+            "doc_1",
+            "draft.md",
+            &before,
+            &after,
+            "2026-01-01T00:00:00Z",
+            source(),
+            || "span_1".into(),
+        );
+
+        assert_eq!(record.spans.len(), 1);
+        assert_eq!(record.spans[0].quote, "Revised paragraph.\n");
     }
 }

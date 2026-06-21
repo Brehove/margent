@@ -312,14 +312,8 @@ pub fn build_focused_revise_prompt(
     prompt.push_str("## Your Task\n\n");
     prompt.push_str(
         "Revise ONLY the target passage above to address the feedback. \
-         You MUST respond with a JSON object in this exact format:\n\n\
-         ```json\n\
-         {\n\
-           \"assistantMessage\": \"Brief description of what you changed\",\n\
-           \"replacementText\": \"The revised text that should replace the target passage\",\n\
-           \"resolveThreadIds\": [\"Optional thread ids to resolve after the edit is applied\"]\n\
-         }\n\
-         ```\n\n\
+         You MUST respond with ONLY a valid JSON object in this exact shape, with no Markdown fence and no prose before or after it:\n\n\
+         {\"assistantMessage\":\"Brief description of what you changed\",\"replacementText\":\"The revised text that should replace the target passage\",\"resolveThreadIds\":[]}\n\n\
          Important:\n\
          - Return ONLY the replacement passage in replacementText, not the full document\n\
          - The replacement text will be spliced back into the original document at the anchored range\n\
@@ -996,7 +990,11 @@ pub fn parse_revision_response(
     provider: Provider,
     response: &ProviderResponse,
 ) -> Result<RevisionResult, String> {
-    let parsed = parse_provider_revision_json(provider, response)?;
+    let parsed = parse_provider_revision_json(
+        provider,
+        response,
+        &["updatedDocumentText", "replacementText"],
+    )?;
 
     let assistant_message = parsed
         .get("assistantMessage")
@@ -1007,6 +1005,7 @@ pub fn parse_revision_response(
     let updated_document_text = parsed
         .get("updatedDocumentText")
         .and_then(|v| v.as_str())
+        .or_else(|| parsed.get("replacementText").and_then(|v| v.as_str()))
         .ok_or_else(|| {
             format!(
                 "Provider response missing 'updatedDocumentText' field.\nParsed JSON:\n{parsed}"
@@ -1036,7 +1035,17 @@ pub fn parse_focused_revision_response(
     provider: Provider,
     response: &ProviderResponse,
 ) -> Result<FocusedRevisionResult, String> {
-    let parsed = parse_provider_revision_json(provider, response)?;
+    let parsed = match parse_provider_revision_json(provider, response, &["replacementText"]) {
+        Ok(parsed) => parsed,
+        Err(error) => {
+            let raw = response.stdout.trim();
+            let response_text = provider_json_text(provider, raw);
+            if let Some(fallback) = focused_revision_from_plain_text(&response_text) {
+                return Ok(fallback);
+            }
+            return Err(error);
+        }
+    };
 
     let assistant_message = parsed
         .get("assistantMessage")
@@ -1070,9 +1079,44 @@ pub fn parse_focused_revision_response(
     })
 }
 
+fn focused_revision_from_plain_text(response_text: &str) -> Option<FocusedRevisionResult> {
+    let replacement_text = plain_replacement_text(response_text)?;
+    Some(FocusedRevisionResult {
+        assistant_message: "Proposed a replacement for the selected passage.".into(),
+        replacement_text,
+        resolve_thread_ids: Vec::new(),
+    })
+}
+
+fn plain_replacement_text(response_text: &str) -> Option<String> {
+    let mut candidate = extract_json_block(response_text).trim().to_string();
+    if candidate.is_empty() || candidate.starts_with('{') {
+        return None;
+    }
+
+    for prefix in [
+        "Here is the revised passage:",
+        "Here's the revised passage:",
+        "Revised passage:",
+        "Replacement:",
+        "replacementText:",
+    ] {
+        if candidate
+            .get(..prefix.len())
+            .is_some_and(|value| value.eq_ignore_ascii_case(prefix))
+        {
+            candidate = candidate[prefix.len()..].trim().to_string();
+            break;
+        }
+    }
+
+    (!candidate.trim().is_empty()).then_some(candidate)
+}
+
 fn parse_provider_revision_json(
     provider: Provider,
     response: &ProviderResponse,
+    expected_keys: &[&str],
 ) -> Result<serde_json::Value, String> {
     let raw = response.stdout.trim().to_string();
     if raw.is_empty() {
@@ -1080,10 +1124,11 @@ fn parse_provider_revision_json(
     }
 
     let json_text = provider_json_text(provider, &raw);
-    let json_str = extract_json_block(&json_text);
-
-    serde_json::from_str(&json_str).map_err(|e| {
-        format!("Unable to parse provider revision response as JSON: {e}\nRaw output:\n{raw}")
+    parse_revision_json(&json_text, expected_keys).map_err(|e| {
+        format!(
+            "Unable to parse provider revision response as JSON: {e}. Response began: {}\nRaw output:\n{raw}",
+            preview_provider_text(&json_text)
+        )
     })
 }
 
@@ -1269,8 +1314,10 @@ fn collect_content_text(value: Option<&serde_json::Value>) -> Option<String> {
 fn extract_json_block(text: &str) -> String {
     let trimmed = text.trim();
 
-    // If it already starts with {, assume it's JSON
     if trimmed.starts_with('{') {
+        if let Some(json_object) = extract_balanced_json_object(trimmed) {
+            return json_object;
+        }
         return trimmed.to_string();
     }
 
@@ -1294,8 +1341,111 @@ fn extract_json_block(text: &str) -> String {
         }
     }
 
+    if let Some(json_object) = extract_balanced_json_object(trimmed) {
+        return json_object;
+    }
+
     // Last resort: return as-is
     trimmed.to_string()
+}
+
+fn parse_revision_json(
+    response_text: &str,
+    expected_keys: &[&str],
+) -> Result<serde_json::Value, String> {
+    let block = extract_json_block(response_text);
+
+    if let Ok(value) = serde_json::from_str::<serde_json::Value>(&block) {
+        if value.is_object() && object_has_any_key(&value, expected_keys) {
+            return Ok(value);
+        }
+    }
+
+    if let Some(value) = find_revision_object_in_text(response_text, expected_keys) {
+        return Ok(value);
+    }
+
+    serde_json::from_str::<serde_json::Value>(&block).map_err(|error| error.to_string())
+}
+
+fn object_has_any_key(value: &serde_json::Value, keys: &[&str]) -> bool {
+    match value {
+        serde_json::Value::Object(map) => keys.iter().any(|key| map.contains_key(*key)),
+        _ => false,
+    }
+}
+
+fn find_revision_object_in_text(text: &str, expected_keys: &[&str]) -> Option<serde_json::Value> {
+    let mut cursor = 0usize;
+    while cursor < text.len() {
+        let slice = &text[cursor..];
+        let Some(rel_index) = slice.find('{') else {
+            break;
+        };
+        let start = cursor + rel_index;
+        if let Some(candidate) = extract_balanced_json_object(&text[start..]) {
+            if let Ok(value) = serde_json::from_str::<serde_json::Value>(&candidate) {
+                if value.is_object() && object_has_any_key(&value, expected_keys) {
+                    return Some(value);
+                }
+            }
+            cursor = start + 1;
+        } else {
+            break;
+        }
+    }
+    None
+}
+
+fn extract_balanced_json_object(text: &str) -> Option<String> {
+    for (start, character) in text.char_indices() {
+        if character != '{' {
+            continue;
+        }
+
+        let mut depth = 0usize;
+        let mut in_string = false;
+        let mut escaped = false;
+
+        for (relative_index, current) in text[start..].char_indices() {
+            if in_string {
+                if escaped {
+                    escaped = false;
+                } else if current == '\\' {
+                    escaped = true;
+                } else if current == '"' {
+                    in_string = false;
+                }
+                continue;
+            }
+
+            match current {
+                '"' => in_string = true,
+                '{' => depth += 1,
+                '}' => {
+                    depth = depth.saturating_sub(1);
+                    if depth == 0 {
+                        let end = start + relative_index + current.len_utf8();
+                        return Some(text[start..end].trim().to_string());
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+
+    None
+}
+
+fn preview_provider_text(text: &str) -> String {
+    let normalized = text.replace('\n', "\\n");
+    let mut chars = normalized.chars();
+    let preview = chars.by_ref().take(220).collect::<String>();
+    if chars.next().is_some() {
+        format!("{preview}...")
+    } else {
+        preview
+    }
 }
 
 #[cfg(test)]
@@ -1517,6 +1667,110 @@ mod tests {
             parse_feedback_response(Provider::Codex, &response).expect("parse codex stream");
 
         assert_eq!(feedback, "Actual Codex answer");
+    }
+
+    #[test]
+    fn parses_focused_revision_from_embedded_json() {
+        let response = ProviderResponse {
+            stdout: "Here is the JSON:\n{\"assistantMessage\":\"Tightened\",\"replacementText\":\"New text\",\"resolveThreadIds\":[]}\nDone.".into(),
+            stderr: String::new(),
+            success: true,
+            session_id: None,
+        };
+
+        let revision = parse_focused_revision_response(Provider::Codex, &response)
+            .expect("parse focused revision");
+
+        assert_eq!(revision.assistant_message, "Tightened");
+        assert_eq!(revision.replacement_text, "New text");
+        assert!(revision.resolve_thread_ids.is_empty());
+    }
+
+    #[test]
+    fn focused_revision_handles_trailing_prose_after_json_object() {
+        let response = ProviderResponse {
+            stdout: "{\"assistantMessage\":\"Tightened\",\"replacementText\":\"New text\",\"resolveThreadIds\":[]}\n\nThat should help.".into(),
+            stderr: String::new(),
+            success: true,
+            session_id: None,
+        };
+
+        let revision = parse_focused_revision_response(Provider::Codex, &response)
+            .expect("parse focused revision");
+
+        assert_eq!(revision.assistant_message, "Tightened");
+        assert_eq!(revision.replacement_text, "New text");
+    }
+
+    #[test]
+    fn focused_revision_skips_non_matching_embedded_braces() {
+        let response = ProviderResponse {
+            stdout: "Use `{name}` as a placeholder. Example: {\"foo\":42}. Real response:\n{\"assistantMessage\":\"Tightened\",\"replacementText\":\"New text\",\"resolveThreadIds\":[]}".into(),
+            stderr: String::new(),
+            success: true,
+            session_id: None,
+        };
+
+        let revision = parse_focused_revision_response(Provider::Codex, &response)
+            .expect("parse focused revision");
+
+        assert_eq!(revision.assistant_message, "Tightened");
+        assert_eq!(revision.replacement_text, "New text");
+    }
+
+    #[test]
+    fn focused_revision_handles_concatenated_agent_messages_around_json() {
+        let response = ProviderResponse {
+            stdout: "Done.{\"assistantMessage\":\"Tightened\",\"replacementText\":\"New text\",\"resolveThreadIds\":[]}".into(),
+            stderr: String::new(),
+            success: true,
+            session_id: None,
+        };
+
+        let revision = parse_focused_revision_response(Provider::Codex, &response)
+            .expect("parse focused revision");
+
+        assert_eq!(revision.assistant_message, "Tightened");
+        assert_eq!(revision.replacement_text, "New text");
+    }
+
+    #[test]
+    fn document_revision_handles_prose_around_json() {
+        let response = ProviderResponse {
+            stdout: "Here is the revised document:\n{\"assistantMessage\":\"Rewrote intro\",\"updatedDocumentText\":\"# New title\\nBody.\\n\",\"resolveThreadIds\":[]}\nDone.".into(),
+            stderr: String::new(),
+            success: true,
+            session_id: None,
+        };
+
+        let revision =
+            parse_revision_response(Provider::Codex, &response).expect("parse document revision");
+
+        assert_eq!(revision.assistant_message, "Rewrote intro");
+        assert_eq!(revision.updated_document_text, "# New title\nBody.\n");
+    }
+
+    #[test]
+    fn focused_revision_accepts_plain_replacement_text() {
+        let response = ProviderResponse {
+            stdout: "Revised passage:\nThis paragraph is clearer and more direct.".into(),
+            stderr: String::new(),
+            success: true,
+            session_id: None,
+        };
+
+        let revision = parse_focused_revision_response(Provider::Codex, &response)
+            .expect("parse focused revision");
+
+        assert_eq!(
+            revision.assistant_message,
+            "Proposed a replacement for the selected passage."
+        );
+        assert_eq!(
+            revision.replacement_text,
+            "This paragraph is clearer and more direct."
+        );
+        assert!(revision.resolve_thread_ids.is_empty());
     }
 
     #[test]

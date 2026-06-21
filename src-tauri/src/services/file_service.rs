@@ -2,7 +2,6 @@ use std::fs;
 use std::fs::OpenOptions;
 use std::io::Write;
 use std::path::{Component, Path, PathBuf};
-use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::{de::DeserializeOwned, Serialize};
 use sha2::{Digest, Sha256};
@@ -27,6 +26,8 @@ pub fn ensure_workspace_layout(root: &Path) -> Result<PathBuf, String> {
         .map_err(|error| format!("Unable to create .mdreview/agents: {error}"))?;
     fs::create_dir_all(mdreview_path.join("authorship"))
         .map_err(|error| format!("Unable to create .mdreview/authorship: {error}"))?;
+    fs::create_dir_all(mdreview_path.join("snapshots"))
+        .map_err(|error| format!("Unable to create .mdreview/snapshots: {error}"))?;
 
     let adapters_path = mdreview_path.join("adapters.json");
     if !adapters_path.exists() {
@@ -61,30 +62,11 @@ pub fn write_json_atomic<T: Serialize>(path: &Path, value: &T) -> Result<(), Str
 }
 
 pub fn write_string_atomic(path: &Path, body: &str) -> Result<(), String> {
-    write_bytes_atomic(path, body.as_bytes())
+    margent_core::io::write_string_atomic(path, body)
 }
 
 pub fn write_bytes_atomic(path: &Path, body: &[u8]) -> Result<(), String> {
-    let parent = path
-        .parent()
-        .ok_or_else(|| format!("Missing parent directory for {}", path.display()))?;
-    fs::create_dir_all(parent)
-        .map_err(|error| format!("Unable to create {}: {error}", parent.display()))?;
-
-    let nonce = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map_err(|error| format!("Unable to compute system time: {error}"))?
-        .as_nanos();
-    let file_name = path
-        .file_name()
-        .and_then(|value| value.to_str())
-        .ok_or_else(|| format!("Invalid filename for {}", path.display()))?;
-    let tmp_path = parent.join(format!(".{file_name}.{nonce}.tmp"));
-
-    fs::write(&tmp_path, body)
-        .map_err(|error| format!("Unable to write {}: {error}", tmp_path.display()))?;
-    fs::rename(&tmp_path, path)
-        .map_err(|error| format!("Unable to move {} into place: {error}", path.display()))
+    margent_core::io::write_file_atomic(path, body)
 }
 
 pub fn append_ndjson<T: Serialize>(path: &Path, value: &T) -> Result<(), String> {

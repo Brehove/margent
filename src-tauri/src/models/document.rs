@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-pub use margent_core::document::{DocumentRecord, HeadingIndexEntry};
+pub use margent_core::document::{DocumentRecord, DocumentVersion, HeadingIndexEntry};
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -17,15 +17,44 @@ pub struct DocumentPayload {
     pub frontmatter_mode: String,
     pub word_count: usize,
     pub heading_index: Vec<HeadingIndexEntry>,
+    pub version: DocumentVersion,
     pub content: String,
 }
 
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(
+    tag = "status",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
+pub enum SaveDocumentIfCurrentResult {
+    Saved {
+        document: Box<DocumentPayload>,
+        operation_id: String,
+    },
+    Conflict {
+        expected_version: DocumentVersion,
+        actual_version: DocumentVersion,
+        operation_id: String,
+    },
+}
+
 pub trait IntoDocumentPayload {
-    fn into_payload(self, absolute_path: String, content: String) -> DocumentPayload;
+    fn into_payload(
+        self,
+        absolute_path: String,
+        content: String,
+        version: DocumentVersion,
+    ) -> DocumentPayload;
 }
 
 impl IntoDocumentPayload for DocumentRecord {
-    fn into_payload(self, absolute_path: String, content: String) -> DocumentPayload {
+    fn into_payload(
+        self,
+        absolute_path: String,
+        content: String,
+        version: DocumentVersion,
+    ) -> DocumentPayload {
         DocumentPayload {
             schema_version: self.schema_version,
             id: self.id,
@@ -39,6 +68,7 @@ impl IntoDocumentPayload for DocumentRecord {
             frontmatter_mode: self.frontmatter_mode,
             word_count: self.word_count,
             heading_index: self.heading_index,
+            version,
             content,
         }
     }

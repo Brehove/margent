@@ -1,13 +1,43 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::thread;
+use std::time::{Instant, UNIX_EPOCH};
 
-use crate::models::document::{DocumentPayload, DocumentRecord, IntoDocumentPayload};
+use crate::models::document::{
+    DocumentPayload, DocumentRecord, DocumentVersion, IntoDocumentPayload,
+    SaveDocumentIfCurrentResult,
+};
 use crate::models::proposal::ProposalRecord;
+use crate::models::snapshot::DocumentSnapshotRecord;
 use crate::models::thread::ThreadRecord;
 use crate::models::workspace::{AssetImportResult, WorkspaceRecord, WorkspaceSnapshot};
 
 use super::{file_service, thread_service};
+
+struct DebugTiming {
+    label: &'static str,
+    start: Instant,
+}
+
+impl DebugTiming {
+    fn new(label: &'static str) -> Self {
+        Self {
+            label,
+            start: Instant::now(),
+        }
+    }
+
+    fn mark(&self, step: &str) {
+        #[cfg(debug_assertions)]
+        eprintln!(
+            "[margent timing] {}: {} at {:.1}ms",
+            self.label,
+            step,
+            self.start.elapsed().as_secs_f64() * 1000.0
+        );
+    }
+}
 
 pub fn open_workspace(path: &str) -> Result<WorkspaceSnapshot, String> {
     let (root_path, opened_path) = file_service::resolve_workspace_root(Path::new(path))?;
@@ -44,11 +74,14 @@ pub fn open_workspace(path: &str) -> Result<WorkspaceSnapshot, String> {
 pub fn read_document(workspace_root: &str, relative_path: &str) -> Result<DocumentPayload, String> {
     let root_path = Path::new(workspace_root);
     let document_path = file_service::resolve_document_path(root_path, relative_path)?;
-    let content = fs::read_to_string(&document_path)
-        .map_err(|error| format!("Unable to read {}: {error}", document_path.display()))?;
+    let (content, version) = read_document_content_and_version(&document_path)?;
     let record = upsert_document_record(root_path, relative_path, &content)?;
 
-    Ok(record.into_payload(document_path.to_string_lossy().to_string(), content))
+    Ok(record.into_payload(
+        document_path.to_string_lossy().to_string(),
+        content,
+        version,
+    ))
 }
 
 pub fn create_markdown_file(
@@ -75,6 +108,7 @@ pub fn create_markdown_file(
         &document_path,
     )?;
     let record = upsert_document_record(root_path, &normalized_relative_path, content)?;
+    let version = document_version_for_path_and_content(&document_path, content)?;
 
     thread_service::append_event(
         root_path,
@@ -88,6 +122,7 @@ pub fn create_markdown_file(
     Ok(record.into_payload(
         document_path.to_string_lossy().to_string(),
         content.to_string(),
+        version,
     ))
 }
 
@@ -108,8 +143,7 @@ pub fn rename_markdown_file(
 
     rename_document_file(&from_path, &to_path, to_relative_path)?;
 
-    let content = fs::read_to_string(&to_path)
-        .map_err(|error| format!("Unable to read {}: {error}", to_path.display()))?;
+    let (content, version) = read_document_content_and_version(&to_path)?;
     let normalized_to_relative_path = file_service::relative_path_string(
         &root_path.canonicalize().map_err(|error| {
             format!(
@@ -146,7 +180,7 @@ pub fn rename_markdown_file(
         )),
     )?;
 
-    Ok(record.into_payload(to_path.to_string_lossy().to_string(), content))
+    Ok(record.into_payload(to_path.to_string_lossy().to_string(), content, version))
 }
 
 pub fn delete_markdown_file(
@@ -160,6 +194,11 @@ pub fn delete_markdown_file(
     if !document_path.is_file() {
         return Err(format!("{relative_path} is not a Markdown file."));
     }
+
+    let content = fs::read_to_string(&document_path)
+        .map_err(|error| format!("Unable to read {}: {error}", document_path.display()))?;
+    let document_record = upsert_document_record(root_path, relative_path, &content)?;
+    snapshot_document(root_path, &document_record, &content, "delete", None)?;
 
     fs::remove_file(&document_path)
         .map_err(|error| format!("Unable to delete {}: {error}", document_path.display()))?;
@@ -176,6 +215,33 @@ pub fn delete_markdown_file(
     )?;
 
     open_workspace(workspace_root)
+}
+
+pub fn snapshot_document(
+    root_path: &Path,
+    document: &DocumentRecord,
+    content: &str,
+    reason: &str,
+    proposal_id: Option<&str>,
+) -> Result<DocumentSnapshotRecord, String> {
+    let mdreview_path = file_service::ensure_workspace_layout(root_path)?;
+    let snapshot_id = margent_core::id::new_id("snapshot");
+    let created_at = file_service::now_rfc3339()?;
+    let record = DocumentSnapshotRecord {
+        id: snapshot_id.clone(),
+        document_id: document.id.clone(),
+        relative_path: document.relative_path.clone(),
+        content_hash: file_service::content_hash(content),
+        content: content.to_string(),
+        created_at,
+        reason: reason.to_string(),
+        proposal_id: proposal_id.map(str::to_string),
+    };
+    let snapshot_path = mdreview_path
+        .join("snapshots")
+        .join(format!("{snapshot_id}.json"));
+    file_service::write_json_atomic(&snapshot_path, &record)?;
+    Ok(record)
 }
 
 pub fn reveal_markdown_file(workspace_root: &str, relative_path: &str) -> Result<(), String> {
@@ -216,9 +282,8 @@ pub fn check_document_update(
 ) -> Result<Option<DocumentPayload>, String> {
     let root_path = Path::new(workspace_root);
     let document_path = file_service::resolve_document_path(root_path, relative_path)?;
-    let content = fs::read_to_string(&document_path)
-        .map_err(|error| format!("Unable to read {}: {error}", document_path.display()))?;
-    let current_content_hash = file_service::content_hash(&content);
+    let (content, version) = read_document_content_and_version(&document_path)?;
+    let current_content_hash = version.content_hash.clone();
 
     if current_content_hash == known_content_hash {
         return Ok(None);
@@ -228,6 +293,7 @@ pub fn check_document_update(
     Ok(Some(record.into_payload(
         document_path.to_string_lossy().to_string(),
         content,
+        version,
     )))
 }
 
@@ -236,16 +302,159 @@ pub fn save_document(
     relative_path: &str,
     content: &str,
 ) -> Result<DocumentPayload, String> {
+    save_document_with_reattach(
+        workspace_root,
+        relative_path,
+        content,
+        ReattachMode::Blocking,
+        "save_document",
+    )
+}
+
+pub fn save_document_after_proposal_accept(
+    workspace_root: &str,
+    relative_path: &str,
+    content: &str,
+) -> Result<DocumentPayload, String> {
+    save_document_with_reattach(
+        workspace_root,
+        relative_path,
+        content,
+        ReattachMode::Deferred,
+        "save_document_after_proposal_accept",
+    )
+}
+
+fn save_document_with_reattach(
+    workspace_root: &str,
+    relative_path: &str,
+    content: &str,
+    reattach_mode: ReattachMode,
+    timing_label: &'static str,
+) -> Result<DocumentPayload, String> {
+    let timing = DebugTiming::new(timing_label);
     let root_path = Path::new(workspace_root);
     let document_path = file_service::resolve_document_path(root_path, relative_path)?;
+    timing.mark("resolve path");
     file_service::write_string_atomic(&document_path, content)?;
+    timing.mark("write file");
+    let version = document_version_for_path_and_content(&document_path, content)?;
+    timing.mark("document version");
     let record = upsert_document_record(root_path, relative_path, content)?;
-    thread_service::reattach_document_threads(root_path, &record, content)?;
+    timing.mark("upsert document record");
+    match reattach_mode {
+        ReattachMode::Blocking => {
+            thread_service::reattach_document_threads(root_path, &record, content)?;
+            timing.mark("reattach threads");
+        }
+        ReattachMode::Deferred => {
+            schedule_document_thread_reattach(
+                root_path.to_path_buf(),
+                record.clone(),
+                content.to_string(),
+            );
+            timing.mark("schedule reattach threads");
+        }
+    }
 
     Ok(record.into_payload(
         document_path.to_string_lossy().to_string(),
         content.to_string(),
+        version,
     ))
+}
+
+#[derive(Clone, Copy)]
+enum ReattachMode {
+    Blocking,
+    Deferred,
+}
+
+fn schedule_document_thread_reattach(
+    root_path: PathBuf,
+    document_record: DocumentRecord,
+    content: String,
+) {
+    let document_id = document_record.id.clone();
+    let spawned_document_id = document_id.clone();
+    let thread_name = format!("margent-reattach-{document_id}");
+    if let Err(error) = thread::Builder::new().name(thread_name).spawn(move || {
+        let start = Instant::now();
+        let result = reattach_document_threads_if_current(&root_path, &document_record, &content);
+        #[cfg(debug_assertions)]
+        match result {
+            Ok(()) => eprintln!(
+                "[margent timing] deferred reattach_document_threads: document={}, elapsed={:.1}ms",
+                spawned_document_id,
+                start.elapsed().as_secs_f64() * 1000.0
+            ),
+            Err(error) => eprintln!(
+                "[margent timing] deferred reattach_document_threads failed: document={}, error={}",
+                spawned_document_id, error
+            ),
+        }
+    }) {
+        #[cfg(debug_assertions)]
+        eprintln!(
+            "[margent timing] deferred reattach_document_threads spawn failed: document={}, error={}",
+            document_id, error
+        );
+    }
+}
+
+fn reattach_document_threads_if_current(
+    root_path: &Path,
+    document_record: &DocumentRecord,
+    content: &str,
+) -> Result<(), String> {
+    let Some(current_record) = read_document_record(root_path, &document_record.id)? else {
+        return Ok(());
+    };
+
+    if current_record.current_content_hash != document_record.current_content_hash {
+        #[cfg(debug_assertions)]
+        eprintln!(
+            "[margent timing] deferred reattach_document_threads skipped stale document: document={}",
+            document_record.id
+        );
+        return Ok(());
+    }
+
+    thread_service::reattach_document_threads(root_path, document_record, content)
+}
+
+pub fn save_document_if_current(
+    workspace_root: &str,
+    relative_path: &str,
+    content: &str,
+    expected_version: &DocumentVersion,
+    operation_id: &str,
+) -> Result<SaveDocumentIfCurrentResult, String> {
+    let root_path = Path::new(workspace_root);
+    let document_path = file_service::resolve_document_path(root_path, relative_path)?;
+    let (_current_content, actual_version) = read_document_content_and_version(&document_path)?;
+
+    if &actual_version != expected_version {
+        return Ok(SaveDocumentIfCurrentResult::Conflict {
+            expected_version: expected_version.clone(),
+            actual_version,
+            operation_id: operation_id.to_string(),
+        });
+    }
+
+    file_service::write_string_atomic(&document_path, content)?;
+    let version = document_version_for_path_and_content(&document_path, content)?;
+    let record = upsert_document_record(root_path, relative_path, content)?;
+    thread_service::reattach_document_threads(root_path, &record, content)?;
+
+    Ok(SaveDocumentIfCurrentResult::Saved {
+        document: Box::new(record.into_payload(
+            document_path.to_string_lossy().to_string(),
+            content.to_string(),
+            version,
+        )),
+        operation_id: operation_id.to_string(),
+    })
 }
 
 pub fn import_asset(
@@ -285,6 +494,32 @@ pub fn import_asset(
     Ok(AssetImportResult {
         absolute_path: asset_path.to_string_lossy().to_string(),
         relative_path,
+    })
+}
+
+fn read_document_content_and_version(path: &Path) -> Result<(String, DocumentVersion), String> {
+    let content = fs::read_to_string(path)
+        .map_err(|error| format!("Unable to read {}: {error}", path.display()))?;
+    let version = document_version_for_path_and_content(path, &content)?;
+    Ok((content, version))
+}
+
+pub(crate) fn document_version_for_path_and_content(
+    path: &Path,
+    content: &str,
+) -> Result<DocumentVersion, String> {
+    let metadata = fs::metadata(path)
+        .map_err(|error| format!("Unable to inspect {}: {error}", path.display()))?;
+    let modified_ns = metadata
+        .modified()
+        .ok()
+        .and_then(|modified| modified.duration_since(UNIX_EPOCH).ok())
+        .map(|duration| duration.as_nanos());
+
+    Ok(DocumentVersion {
+        content_hash: file_service::content_hash(content),
+        modified_ns,
+        size: metadata.len(),
     })
 }
 
@@ -826,6 +1061,111 @@ mod tests {
             .join("proposals")
             .join("proposal_delete.json")
             .exists());
+        let snapshots_dir = mdreview.join("snapshots");
+        let snapshot_paths = fs::read_dir(&snapshots_dir)
+            .expect("read snapshots")
+            .map(|entry| entry.expect("snapshot entry").path())
+            .collect::<Vec<_>>();
+        assert_eq!(snapshot_paths.len(), 1);
+        let snapshot = file_service::read_optional_json::<
+            crate::models::snapshot::DocumentSnapshotRecord,
+        >(&snapshot_paths[0])
+        .expect("read snapshot")
+        .expect("snapshot exists");
+        assert_eq!(snapshot.relative_path, "delete-me.md");
+        assert_eq!(snapshot.content, "Alpha beta\n");
+        assert_eq!(snapshot.reason, "delete");
+
+        fs::remove_dir_all(&workspace_root).expect("cleanup temp workspace");
+    }
+
+    #[test]
+    fn save_document_if_current_saves_when_expected_version_matches() {
+        let workspace_root = unique_temp_dir("margent-save-current");
+        fs::create_dir_all(&workspace_root).expect("create temp workspace");
+        fs::write(workspace_root.join("draft.md"), "Alpha beta\n").expect("write document");
+
+        let loaded =
+            read_document(workspace_root.to_str().expect("root str"), "draft.md").expect("read");
+        let next_content = "Alpha beta gamma\n";
+
+        let result = save_document_if_current(
+            workspace_root.to_str().expect("root str"),
+            "draft.md",
+            next_content,
+            &loaded.version,
+            "op-save-1",
+        )
+        .expect("save if current");
+
+        let SaveDocumentIfCurrentResult::Saved {
+            document,
+            operation_id,
+        } = result
+        else {
+            panic!("expected saved result");
+        };
+
+        assert_eq!(operation_id, "op-save-1");
+        assert_eq!(document.relative_path, "draft.md");
+        assert_eq!(document.content, next_content);
+        assert_eq!(
+            document.current_content_hash,
+            file_service::content_hash(next_content)
+        );
+        assert_eq!(
+            document.version.content_hash,
+            file_service::content_hash(next_content)
+        );
+        assert_eq!(document.version.size, next_content.len() as u64);
+        assert_eq!(
+            fs::read_to_string(workspace_root.join("draft.md")).expect("read saved"),
+            next_content
+        );
+
+        fs::remove_dir_all(&workspace_root).expect("cleanup temp workspace");
+    }
+
+    #[test]
+    fn save_document_if_current_conflicts_without_overwriting_external_change() {
+        let workspace_root = unique_temp_dir("margent-save-conflict");
+        fs::create_dir_all(&workspace_root).expect("create temp workspace");
+        fs::write(workspace_root.join("draft.md"), "Alpha beta\n").expect("write document");
+
+        let loaded =
+            read_document(workspace_root.to_str().expect("root str"), "draft.md").expect("read");
+        let external_content = "External change\n";
+        fs::write(workspace_root.join("draft.md"), external_content).expect("write external");
+
+        let result = save_document_if_current(
+            workspace_root.to_str().expect("root str"),
+            "draft.md",
+            "Unsaved local buffer\n",
+            &loaded.version,
+            "op-conflict-1",
+        )
+        .expect("save if current conflict");
+
+        let SaveDocumentIfCurrentResult::Conflict {
+            expected_version,
+            actual_version,
+            operation_id,
+        } = result
+        else {
+            panic!("expected conflict result");
+        };
+
+        assert_eq!(operation_id, "op-conflict-1");
+        assert_eq!(expected_version, loaded.version);
+        assert_eq!(
+            actual_version.content_hash,
+            file_service::content_hash(external_content)
+        );
+        assert_eq!(actual_version.size, external_content.len() as u64);
+        assert_eq!(
+            fs::read_to_string(workspace_root.join("draft.md")).expect("read conflicted"),
+            external_content
+        );
 
         fs::remove_dir_all(&workspace_root).expect("cleanup temp workspace");
     }

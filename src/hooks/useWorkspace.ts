@@ -13,6 +13,8 @@ import { useWorkspaceStore } from "../stores/workspaceStore";
 import type {
   AssetImportResult,
   DocumentPayload,
+  SaveConflict,
+  SaveDocumentIfCurrentResult,
   WorkspaceOpenRequest,
   WorkspaceSnapshot,
 } from "../types/workspace";
@@ -30,6 +32,17 @@ function beginWorkspaceRequest() {
 
 function isCurrentWorkspaceRequest(token: number | null | undefined) {
   return token == null || token === latestWorkspaceRequestToken;
+}
+
+function safeUnlisten(unlisten: () => void | Promise<void>) {
+  try {
+    const result = unlisten();
+    if (result && typeof result === "object" && "catch" in result) {
+      void result.catch(() => undefined);
+    }
+  } catch {
+    // Tauri's dev listener registry can already be gone during HMR cleanup.
+  }
 }
 
 export function useWorkspaceEffects() {
@@ -114,7 +127,7 @@ export function useWorkspaceEffects() {
     })
       .then((unlisten) => {
         if (cancelled) {
-          unlisten();
+          safeUnlisten(unlisten);
           return;
         }
 
@@ -128,7 +141,9 @@ export function useWorkspaceEffects() {
 
     return () => {
       cancelled = true;
-      stopListening?.();
+      if (stopListening) {
+        safeUnlisten(stopListening);
+      }
     };
   }, [setErrorMessage]);
 
@@ -414,6 +429,19 @@ export function reloadPendingExternalDocument() {
   }
 
   applyDocumentPayload(pendingExternalDocument);
+}
+
+export function reloadSaveConflictDiskVersion() {
+  const store = useWorkspaceStore.getState();
+  const saveConflict = store.saveConflict;
+  if (!saveConflict) {
+    return;
+  }
+
+  store.setErrorMessage(null);
+  store.setPendingExternalDocument(null);
+  store.setSaveConflict(null);
+  applyDocumentPayload(saveConflict.diskDocument);
 }
 
 async function synchronizeWorkspaceSnapshot(
@@ -871,6 +899,15 @@ export async function saveCurrentDocument(content: string) {
   }
 
   const { activeDocument, workspace } = latest;
+  if (latest.saveConflict) {
+    latest.setSaveConflict({
+      ...latest.saveConflict,
+      localContent: content,
+    });
+    latest.setErrorMessage("Resolve the disk-change conflict before saving again.");
+    return;
+  }
+
   if (!latest.isEditorDirty && content === activeDocument.content) {
     return;
   }
@@ -879,11 +916,14 @@ export async function saveCurrentDocument(content: string) {
   latest.setErrorMessage(null);
 
   try {
-    const document = await measurePerfAsync(
+    const operationId = newOperationId("save");
+    const result = await measurePerfAsync(
       "saveCurrentDocument",
       () =>
-        invokeBackend<DocumentPayload>("save_document", {
+        invokeBackend<SaveDocumentIfCurrentResult>("save_document_if_current", {
           content,
+          expectedVersion: activeDocument.version,
+          operationId,
           relativePath: activeDocument.relativePath,
           workspaceRoot: workspace.rootPath,
         }),
@@ -891,12 +931,105 @@ export async function saveCurrentDocument(content: string) {
         contentLength: content.length,
       },
     );
+
+    if (!isStillActiveDocument(workspace.rootPath, activeDocument.relativePath)) {
+      return;
+    }
+
+    if (result.status === "conflict") {
+      const diskDocument = await invokeBackend<DocumentPayload>("read_document", {
+        relativePath: activeDocument.relativePath,
+        workspaceRoot: workspace.rootPath,
+      });
+
+      if (!isStillActiveDocument(workspace.rootPath, activeDocument.relativePath)) {
+        return;
+      }
+
+      const conflict: SaveConflict = {
+        actualVersion: result.actualVersion,
+        diskDocument,
+        expectedVersion: result.expectedVersion,
+        localContent: content,
+        operationId: result.operationId,
+        relativePath: activeDocument.relativePath,
+      };
+
+      const store = useWorkspaceStore.getState();
+      store.setIsEditorDirty(true);
+      store.setPendingExternalDocument(diskDocument);
+      store.setSaveConflict(conflict);
+      return;
+    }
+
+    const { document } = result;
     applyDocumentPayload(document);
   } catch (error) {
-    latest.setErrorMessage(getErrorMessage(error, "Unable to save the active document."));
+    useWorkspaceStore
+      .getState()
+      .setErrorMessage(getErrorMessage(error, "Unable to save the active document."));
   } finally {
-    latest.setIsSaving(false);
+    useWorkspaceStore.getState().setIsSaving(false);
   }
+}
+
+export async function keepMargentVersionForSaveConflict() {
+  const latest = useWorkspaceStore.getState();
+  const { activeDocument, saveConflict, workspace } = latest;
+
+  if (!workspace || !activeDocument || !saveConflict || latest.isSaving) {
+    return;
+  }
+
+  latest.setIsSaving(true);
+  latest.setErrorMessage(null);
+
+  try {
+    const document = await measurePerfAsync(
+      "keepMargentVersionForSaveConflict",
+      () =>
+        invokeBackend<DocumentPayload>("save_document", {
+          content: saveConflict.localContent,
+          relativePath: saveConflict.relativePath,
+          workspaceRoot: workspace.rootPath,
+        }),
+      {
+        contentLength: saveConflict.localContent.length,
+      },
+    );
+
+    if (!isStillActiveDocument(workspace.rootPath, saveConflict.relativePath)) {
+      return;
+    }
+
+    const store = useWorkspaceStore.getState();
+    store.setPendingExternalDocument(null);
+    store.setSaveConflict(null);
+    applyDocumentPayload(document);
+  } catch (error) {
+    useWorkspaceStore
+      .getState()
+      .setErrorMessage(getErrorMessage(error, "Unable to keep the Margent draft."));
+  } finally {
+    useWorkspaceStore.getState().setIsSaving(false);
+  }
+}
+
+function isStillActiveDocument(workspaceRoot: string, relativePath: string) {
+  const current = useWorkspaceStore.getState();
+  return (
+    current.workspace?.rootPath === workspaceRoot &&
+    current.activeDocument?.relativePath === relativePath
+  );
+}
+
+function newOperationId(prefix: string) {
+  const random =
+    typeof crypto !== "undefined" && typeof crypto.randomUUID === "function"
+      ? crypto.randomUUID()
+      : `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+
+  return `${prefix}_${random}`;
 }
 
 function getPostDeletePreferredRelativePath(

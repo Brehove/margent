@@ -1,5 +1,8 @@
 use crate::models::adapter::AdapterDefinition;
-use crate::models::proposal::{ProposalMutationResult, ProposalRecord};
+use crate::models::document::DocumentVersion;
+use crate::models::proposal::{
+    ProposalChangeSetResult, ProposalHunkAcceptResult, ProposalMutationResult, ProposalRecord,
+};
 use crate::services::{adapter_service, proposal_service};
 
 #[tauri::command]
@@ -46,12 +49,35 @@ pub fn request_proposal(
 }
 
 #[tauri::command]
+pub fn get_proposal_change_set(
+    workspace_root: String,
+    proposal_id: String,
+) -> Result<ProposalChangeSetResult, String> {
+    proposal_service::get_proposal_change_set(&workspace_root, &proposal_id)
+}
+
+#[tauri::command]
 pub fn accept_proposal(
     workspace_root: String,
     proposal_id: String,
     updated_document_text: Option<String>,
 ) -> Result<ProposalMutationResult, String> {
     proposal_service::accept_proposal(&workspace_root, &proposal_id, updated_document_text)
+}
+
+#[tauri::command]
+pub fn accept_proposal_hunks(
+    workspace_root: String,
+    proposal_id: String,
+    selected_hunk_ids: Vec<String>,
+    expected_document_version: DocumentVersion,
+) -> Result<ProposalHunkAcceptResult, String> {
+    proposal_service::accept_proposal_hunks(
+        &workspace_root,
+        &proposal_id,
+        selected_hunk_ids,
+        &expected_document_version,
+    )
 }
 
 #[tauri::command]

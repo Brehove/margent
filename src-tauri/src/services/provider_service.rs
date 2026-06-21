@@ -10,7 +10,6 @@ use std::time::{Duration, Instant};
 
 use serde::Serialize;
 use serde_json::Value;
-use similar::TextDiff;
 use wait_timeout::ChildExt;
 
 use crate::models::document::DocumentRecord;
@@ -20,7 +19,7 @@ use crate::models::provider::{
 };
 use crate::models::thread::{AnchorRecord, ThreadRecord};
 
-use super::{anchor_service, file_service, thread_service};
+use super::{anchor_service, diff_service, file_service, thread_service};
 
 const PROVIDER_TIMEOUT_SECONDS: u64 = 600;
 pub const PROVIDER_STREAM_EVENT: &str = "margent://provider-stream";
@@ -849,14 +848,8 @@ fn build_focused_revise_prompt(
     prompt.push_str("## Your Task\n\n");
     prompt.push_str(
         "Revise ONLY the target passage above to address the feedback. \
-         You MUST respond with a JSON object in this exact format:\n\n\
-         ```json\n\
-         {\n\
-           \"assistantMessage\": \"Brief description of what you changed\",\n\
-           \"replacementText\": \"The revised text that should replace the target passage\",\n\
-           \"resolveThreadIds\": [\"Optional thread ids to resolve after the edit is applied\"]\n\
-         }\n\
-         ```\n\n\
+         You MUST respond with ONLY a valid JSON object in this exact shape, with no Markdown fence and no prose before or after it:\n\n\
+         {\"assistantMessage\":\"Brief description of what you changed\",\"replacementText\":\"The revised text that should replace the target passage\",\"resolveThreadIds\":[]}\n\n\
          Important:\n\
          - Return ONLY the replacement passage in replacementText, not the full document\n\
          - The replacement text will be spliced back into the original document at the anchored range\n\
@@ -1614,13 +1607,20 @@ fn parse_focused_revision_response(
     raw: &str,
 ) -> Result<FocusedRevisionResult, String> {
     let response_text = provider_response_text(provider, raw);
-    let json_text = extract_json_block(&response_text);
-    let parsed: Value = serde_json::from_str(&json_text).map_err(|error| {
-        format!(
-            "Unable to parse {} revision response as JSON: {error}",
-            provider.display_name()
-        )
-    })?;
+    let parsed: Value = match parse_revision_json(&response_text, &["replacementText"]) {
+        Ok(parsed) => parsed,
+        Err(error) => {
+            if let Some(fallback) = focused_revision_from_plain_text(&response_text) {
+                return Ok(fallback);
+            }
+
+            return Err(format!(
+                "Unable to parse {} revision response as JSON: {error}. Response began: {}",
+                provider.display_name(),
+                preview_provider_text(&response_text)
+            ));
+        }
+    };
     let assistant_message = parsed
         .get("assistantMessage")
         .and_then(Value::as_str)
@@ -1659,13 +1659,16 @@ fn parse_document_revision_response(
     raw: &str,
 ) -> Result<DocumentRevisionResult, String> {
     let response_text = provider_response_text(provider, raw);
-    let json_text = extract_json_block(&response_text);
-    let parsed: Value = serde_json::from_str(&json_text).map_err(|error| {
-        format!(
-            "Unable to parse {} document revision response as JSON: {error}",
-            provider.display_name()
+    let parsed: Value =
+        parse_revision_json(&response_text, &["updatedDocumentText", "replacementText"]).map_err(
+            |error| {
+                format!(
+            "Unable to parse {} document revision response as JSON: {error}. Response began: {}",
+            provider.display_name(),
+            preview_provider_text(&response_text)
         )
-    })?;
+            },
+        )?;
     let assistant_message = parsed
         .get("assistantMessage")
         .and_then(Value::as_str)
@@ -1879,6 +1882,12 @@ fn extract_json_block(text: &str) -> String {
     let trimmed = text.trim();
 
     if trimmed.starts_with('{') {
+        // Prefer the first balanced object so we drop any trailing prose
+        // after the JSON object (e.g. "{...}\n\nDone."). Falls back to the
+        // trimmed text if the scanner cannot find a balanced span.
+        if let Some(json_object) = extract_balanced_json_object(trimmed) {
+            return json_object;
+        }
         return trimmed.to_string();
     }
 
@@ -1901,7 +1910,162 @@ fn extract_json_block(text: &str) -> String {
         }
     }
 
+    if let Some(json_object) = extract_balanced_json_object(trimmed) {
+        return json_object;
+    }
+
     trimmed.to_string()
+}
+
+/// Robust JSON extraction for provider revision responses.
+///
+/// Codex and Claude can emit the requested JSON in several shapes that
+/// the naive `extract_json_block + serde_json::from_str` chain fails on:
+///
+/// 1. The JSON is wrapped in prose ("Sure, here's the revision: {...}").
+/// 2. Two `agent_message` events were concatenated by the streaming
+///    reader, giving "Done.{...}" or "{prose}{json}".
+/// 3. Trailing prose after a complete JSON object ("{...}\n\nDone.").
+/// 4. The model picks the first `{...}` they see in prose (e.g. a
+///    `{name}` template reference) that is not the response JSON.
+///
+/// We first try the legacy `extract_json_block` path; if that does not
+/// parse OR does not contain any expected key, we scan the full response
+/// for the first balanced `{...}` substring whose parsed Value contains
+/// any of the requested keys.
+fn parse_revision_json(response_text: &str, expected_keys: &[&str]) -> Result<Value, String> {
+    let block = extract_json_block(response_text);
+
+    if let Ok(value) = serde_json::from_str::<Value>(&block) {
+        if value.is_object() && object_has_any_key(&value, expected_keys) {
+            return Ok(value);
+        }
+    }
+
+    if let Some(value) = find_revision_object_in_text(response_text, expected_keys) {
+        return Ok(value);
+    }
+
+    // Fall back to the legacy path so callers receive the precise serde
+    // error message for the originally extracted block.
+    serde_json::from_str::<Value>(&block).map_err(|error| error.to_string())
+}
+
+fn object_has_any_key(value: &Value, keys: &[&str]) -> bool {
+    match value {
+        Value::Object(map) => keys.iter().any(|key| map.contains_key(*key)),
+        _ => false,
+    }
+}
+
+fn find_revision_object_in_text(text: &str, expected_keys: &[&str]) -> Option<Value> {
+    let mut cursor = 0usize;
+    while cursor < text.len() {
+        let slice = &text[cursor..];
+        let Some(rel_index) = slice.find('{') else {
+            break;
+        };
+        let start = cursor + rel_index;
+        if let Some(candidate) = extract_balanced_json_object(&text[start..]) {
+            if let Ok(value) = serde_json::from_str::<Value>(&candidate) {
+                if value.is_object() && object_has_any_key(&value, expected_keys) {
+                    return Some(value);
+                }
+            }
+            // Advance past this `{` so we keep scanning for a later
+            // object that contains the expected keys.
+            cursor = start + 1;
+        } else {
+            // Unbalanced from here on; nothing else to try.
+            break;
+        }
+    }
+    None
+}
+
+fn extract_balanced_json_object(text: &str) -> Option<String> {
+    for (start, character) in text.char_indices() {
+        if character != '{' {
+            continue;
+        }
+
+        let mut depth = 0usize;
+        let mut in_string = false;
+        let mut escaped = false;
+
+        for (relative_index, current) in text[start..].char_indices() {
+            if in_string {
+                if escaped {
+                    escaped = false;
+                } else if current == '\\' {
+                    escaped = true;
+                } else if current == '"' {
+                    in_string = false;
+                }
+                continue;
+            }
+
+            match current {
+                '"' => in_string = true,
+                '{' => depth += 1,
+                '}' => {
+                    depth = depth.saturating_sub(1);
+                    if depth == 0 {
+                        let end = start + relative_index + current.len_utf8();
+                        return Some(text[start..end].trim().to_string());
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+
+    None
+}
+
+fn focused_revision_from_plain_text(response_text: &str) -> Option<FocusedRevisionResult> {
+    let replacement_text = plain_replacement_text(response_text)?;
+    Some(FocusedRevisionResult {
+        assistant_message: "Proposed a replacement for the selected passage.".into(),
+        replacement_text,
+        resolve_thread_ids: Vec::new(),
+    })
+}
+
+fn plain_replacement_text(response_text: &str) -> Option<String> {
+    let mut candidate = extract_json_block(response_text).trim().to_string();
+    if candidate.is_empty() || candidate.starts_with('{') {
+        return None;
+    }
+
+    for prefix in [
+        "Here is the revised passage:",
+        "Here's the revised passage:",
+        "Revised passage:",
+        "Replacement:",
+        "replacementText:",
+    ] {
+        if candidate
+            .get(..prefix.len())
+            .is_some_and(|value| value.eq_ignore_ascii_case(prefix))
+        {
+            candidate = candidate[prefix.len()..].trim().to_string();
+            break;
+        }
+    }
+
+    (!candidate.trim().is_empty()).then_some(candidate)
+}
+
+fn preview_provider_text(text: &str) -> String {
+    let normalized = text.replace('\n', "\\n");
+    let mut chars = normalized.chars();
+    let preview = chars.by_ref().take(220).collect::<String>();
+    if chars.next().is_some() {
+        format!("{preview}...")
+    } else {
+        preview
+    }
 }
 
 fn extract_anchor_text(content: &str, anchor: &AnchorRecord) -> Result<String, String> {
@@ -1993,7 +2157,8 @@ fn write_provider_revision_proposal(
 ) -> Result<ProposalRecord, String> {
     let now = file_service::now_rfc3339()?;
     let proposal_id = thread_service::next_id("proposal")?;
-    let computed_diff = compute_unified_diff(document_content, &updated_document_text);
+    let computed_diff =
+        diff_service::compute_unified_diff(document_content, &updated_document_text);
 
     thread_service::append_event(
         workspace_root,
@@ -2058,14 +2223,6 @@ fn save_proposal_record(workspace_root: &Path, proposal: &ProposalRecord) -> Res
     file_service::write_json_atomic(&proposal_path, proposal)
 }
 
-fn compute_unified_diff(before: &str, after: &str) -> String {
-    TextDiff::from_lines(before, after)
-        .unified_diff()
-        .context_radius(2)
-        .header("before", "after")
-        .to_string()
-}
-
 fn summarize_proposal(provider: ThreadProvider, assistant_message: &str) -> String {
     let normalized = assistant_message.replace('\n', " ").trim().to_string();
 
@@ -2110,6 +2267,82 @@ mod tests {
         assert_eq!(parsed.assistant_message, "Tightened");
         assert_eq!(parsed.replacement_text, "New text");
         assert_eq!(parsed.resolve_thread_ids, vec!["thread_1"]);
+    }
+
+    #[test]
+    fn extracts_embedded_json_object_from_provider_response() {
+        let raw = "Here is the JSON:\n{\"assistantMessage\":\"Tightened\",\"replacementText\":\"New text\",\"resolveThreadIds\":[]}\nDone.";
+        let parsed =
+            parse_focused_revision_response(ThreadProvider::Codex, raw).expect("parse response");
+
+        assert_eq!(parsed.assistant_message, "Tightened");
+        assert_eq!(parsed.replacement_text, "New text");
+        assert!(parsed.resolve_thread_ids.is_empty());
+    }
+
+    #[test]
+    fn handles_trailing_prose_after_json_object() {
+        let raw = "{\"assistantMessage\":\"Tightened\",\"replacementText\":\"New text\",\"resolveThreadIds\":[]}\n\nThat should improve clarity.";
+        let parsed =
+            parse_focused_revision_response(ThreadProvider::Codex, raw).expect("parse response");
+
+        assert_eq!(parsed.assistant_message, "Tightened");
+        assert_eq!(parsed.replacement_text, "New text");
+    }
+
+    #[test]
+    fn skips_non_matching_embedded_braces() {
+        // Codex may emit prose that mentions `{template}` placeholders
+        // before producing the real JSON object. The scanner must keep
+        // going until it finds an object that contains `replacementText`.
+        let raw = "Use the `{name}` syntax. Then respond like:\n{\"foo\":42}\nFinally, here is the response:\n{\"assistantMessage\":\"Tightened\",\"replacementText\":\"New text\",\"resolveThreadIds\":[]}\n";
+        let parsed =
+            parse_focused_revision_response(ThreadProvider::Codex, raw).expect("parse response");
+
+        assert_eq!(parsed.assistant_message, "Tightened");
+        assert_eq!(parsed.replacement_text, "New text");
+    }
+
+    #[test]
+    fn handles_concatenated_agent_messages_around_json() {
+        // The streaming reader concatenates multiple `agent_message`
+        // events with no separator, which produced inputs like
+        // "Done.{...}" that used to fail with "expected value at line
+        // 1 column 1".
+        let raw = "Done.{\"assistantMessage\":\"Tightened\",\"replacementText\":\"New text\",\"resolveThreadIds\":[]}";
+        let parsed =
+            parse_focused_revision_response(ThreadProvider::Codex, raw).expect("parse response");
+
+        assert_eq!(parsed.assistant_message, "Tightened");
+        assert_eq!(parsed.replacement_text, "New text");
+    }
+
+    #[test]
+    fn document_revision_handles_prose_around_json() {
+        use super::parse_document_revision_response;
+        let raw = "Here is the revised document:\n{\"assistantMessage\":\"Rewrote intro\",\"updatedDocumentText\":\"# New title\\nBody.\\n\",\"resolveThreadIds\":[]}\nDone.";
+        let parsed =
+            parse_document_revision_response(ThreadProvider::Codex, raw).expect("parse response");
+
+        assert_eq!(parsed.assistant_message, "Rewrote intro");
+        assert_eq!(parsed.updated_document_text, "# New title\nBody.\n");
+    }
+
+    #[test]
+    fn focused_revision_accepts_plain_replacement_text() {
+        let raw = "Revised passage:\nThis paragraph is clearer and more direct.";
+        let parsed =
+            parse_focused_revision_response(ThreadProvider::Codex, raw).expect("parse response");
+
+        assert_eq!(
+            parsed.assistant_message,
+            "Proposed a replacement for the selected passage."
+        );
+        assert_eq!(
+            parsed.replacement_text,
+            "This paragraph is clearer and more direct."
+        );
+        assert!(parsed.resolve_thread_ids.is_empty());
     }
 
     #[test]

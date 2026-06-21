@@ -3,7 +3,6 @@ use std::ffi::OsStr;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
-use std::time::{SystemTime, UNIX_EPOCH};
 
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use base64::Engine;
@@ -12,6 +11,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 
 use crate::document::DocumentRecord;
+use crate::id::new_id;
+use crate::io::write_string_atomic;
 
 const GOOGLE_DOC_MIME_TYPE: &str = "application/vnd.google-apps.document";
 const MAX_INLINE_IMAGE_BYTES: u64 = 8 * 1024 * 1024;
@@ -575,16 +576,8 @@ fn temporary_output_path(
     if name.is_empty() {
         name = document.id.clone();
     }
-    let nonce = next_id("export")?;
+    let nonce = new_id("export");
     Ok(env::temp_dir().join(format!("margent-{name}-{nonce}.{}", format.extension())))
-}
-
-fn next_id(prefix: &str) -> Result<String, String> {
-    let micros = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map_err(|error| format!("System time error: {error}"))?
-        .as_micros();
-    Ok(format!("{prefix}_{micros}"))
 }
 
 fn strip_yaml_frontmatter(markdown: &str) -> &str {
@@ -659,27 +652,6 @@ fn inline_image_data_uri(document_dir: Option<&Path>, dest_url: &str) -> Option<
     ))
 }
 
-fn write_string_atomic(path: &Path, body: &str) -> Result<(), String> {
-    let parent = path
-        .parent()
-        .ok_or_else(|| format!("Missing parent directory for {}", path.display()))?;
-    fs::create_dir_all(parent)
-        .map_err(|error| format!("Unable to create {}: {error}", parent.display()))?;
-    let nonce = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map_err(|error| format!("Unable to compute system time: {error}"))?
-        .as_nanos();
-    let file_name = path
-        .file_name()
-        .and_then(OsStr::to_str)
-        .ok_or_else(|| format!("Invalid filename for {}", path.display()))?;
-    let tmp_path = parent.join(format!(".{file_name}.{nonce}.tmp"));
-    fs::write(&tmp_path, body)
-        .map_err(|error| format!("Unable to write {}: {error}", tmp_path.display()))?;
-    fs::rename(&tmp_path, path)
-        .map_err(|error| format!("Unable to move {} into place: {error}", path.display()))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -751,6 +723,41 @@ mod tests {
         let output = output_path_for(root, &doc, None, ExportFormat::Html).expect("output path");
 
         assert_eq!(output, Path::new("/tmp/margent/folder/draft.html"));
+    }
+
+    #[test]
+    fn html_export_writes_and_replaces_output_file() {
+        let root = std::env::temp_dir().join(new_id("margent_core_export_test"));
+        let doc = document("draft.md");
+        let output = Path::new("exports").join("draft.html");
+        let output_path = export_file(
+            &root,
+            &doc,
+            "# First\n\nBody",
+            ExportFormat::Html,
+            Some(&output),
+        )
+        .expect("export html")
+        .output_path;
+
+        assert_eq!(output_path, root.join(&output));
+        let first_html = fs::read_to_string(&output_path).expect("read first html export");
+        assert!(first_html.contains("<h1>First</h1>"));
+
+        export_file(
+            &root,
+            &doc,
+            "# Second\n\nReplacement",
+            ExportFormat::Html,
+            Some(&output),
+        )
+        .expect("replace html export");
+
+        let second_html = fs::read_to_string(&output_path).expect("read second html export");
+        assert!(second_html.contains("<h1>Second</h1>"));
+        assert!(!second_html.contains("<h1>First</h1>"));
+
+        let _ = fs::remove_dir_all(root);
     }
 
     #[test]

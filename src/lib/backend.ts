@@ -9,7 +9,12 @@ import { watch as tauriWatch, type WatchEvent } from "@tauri-apps/plugin-fs";
 import type { ProposalMutationResult } from "../types/proposal";
 import type { ProjectSearchMode, ProjectSearchResponse } from "../types/search";
 import type { ThreadRecord } from "../types/thread";
-import type { DocumentPayload, DocumentSummary, WorkspaceSnapshot } from "../types/workspace";
+import type {
+  DocumentPayload,
+  DocumentSummary,
+  SaveDocumentIfCurrentResult,
+  WorkspaceSnapshot,
+} from "../types/workspace";
 
 type InvokeArgs = Record<string, unknown> | undefined;
 type Unlisten = () => void;
@@ -84,6 +89,8 @@ async function webInvoke<T>(command: string, args: InvokeArgs): Promise<T> {
       return servedDocumentByRelativePath(requiredString(args, "relativePath")) as Promise<T>;
     case "check_document_update":
       return servedDocumentByRelativePath(requiredString(args, "relativePath")) as Promise<T>;
+    case "save_document_if_current":
+      return servedSaveDocumentIfCurrent(args) as Promise<T>;
     case "search_workspace":
       return servedProjectSearch(args) as Promise<T>;
     case "load_threads":
@@ -132,6 +139,9 @@ async function webInvoke<T>(command: string, args: InvokeArgs): Promise<T> {
         `/api/proposals/${encodeURIComponent(requiredString(args, "proposalId"))}/reject`,
         { method: "POST" },
       ) as Promise<T>;
+    case "get_proposal_change_set":
+    case "accept_proposal_hunks":
+      throw new Error("Inline proposal hunk review is only available in the Margent desktop app.");
     default:
       throw new Error(`${command} is only available in the Margent desktop app.`);
   }
@@ -255,7 +265,16 @@ async function servedDocumentByRelativePath(relativePath: string): Promise<Docum
     ...payload.document,
     absolutePath: payload.document.relativePath,
     content: payload.content,
+    version: {
+      contentHash: payload.document.currentContentHash,
+      modifiedNs: null,
+      size: new TextEncoder().encode(payload.content).length,
+    },
   };
+}
+
+async function servedSaveDocumentIfCurrent(_args: InvokeArgs): Promise<SaveDocumentIfCurrentResult> {
+  throw new Error("Saving documents is only available in the Margent desktop app.");
 }
 
 async function servedThread(threadId: string): Promise<ThreadRecord> {

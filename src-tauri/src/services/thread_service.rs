@@ -1,7 +1,8 @@
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
+use serde::de::DeserializeOwned;
 use serde_json::json;
 
 use crate::models::document::DocumentRecord;
@@ -27,7 +28,7 @@ pub fn load_threads(workspace_root: &str, document_id: &str) -> Result<Vec<Threa
             continue;
         }
 
-        if let Some(thread) = file_service::read_optional_json::<ThreadRecord>(&path)? {
+        if let Some(thread) = read_scanned_thread_sidecar::<ThreadRecord>(&path, "thread")? {
             let thread = normalize_thread_record(thread);
             if thread.document_id == document_id {
                 threads.push(thread);
@@ -55,7 +56,7 @@ pub fn load_all_threads(workspace_root: &str) -> Result<Vec<ThreadRecord>, Strin
             continue;
         }
 
-        if let Some(thread) = file_service::read_optional_json::<ThreadRecord>(&path)? {
+        if let Some(thread) = read_scanned_thread_sidecar::<ThreadRecord>(&path, "thread")? {
             threads.push(normalize_thread_record(thread));
         }
     }
@@ -85,7 +86,8 @@ pub fn thread_update_signature(workspace_root: &str, document_id: &str) -> Resul
             continue;
         }
 
-        let Some(thread) = file_service::read_optional_json::<ThreadSummaryRecord>(&path)? else {
+        let Some(thread) = read_scanned_thread_sidecar::<ThreadSummaryRecord>(&path, "thread")?
+        else {
             continue;
         };
 
@@ -170,8 +172,12 @@ pub fn reattach_document_threads(
     document_record: &DocumentRecord,
     content: &str,
 ) -> Result<(), String> {
+    let start = Instant::now();
     let mdreview_path = file_service::ensure_workspace_layout(workspace_root)?;
     let threads_dir = mdreview_path.join("threads");
+    let mut scanned_count = 0usize;
+    let mut document_thread_count = 0usize;
+    let mut changed_count = 0usize;
 
     for entry in fs::read_dir(&threads_dir)
         .map_err(|error| format!("Unable to read {}: {error}", threads_dir.display()))?
@@ -182,21 +188,25 @@ pub fn reattach_document_threads(
         if !path.is_file() {
             continue;
         }
+        scanned_count += 1;
 
-        let Some(mut thread) = file_service::read_optional_json::<ThreadRecord>(&path)? else {
+        let Some(mut thread) = read_scanned_thread_sidecar::<ThreadRecord>(&path, "thread")? else {
             continue;
         };
 
         if thread.document_id != document_record.id {
             continue;
         }
+        document_thread_count += 1;
 
         let original_anchor = thread.anchor.clone();
-        anchor_service::reattach_anchor(
-            &mut thread.anchor,
-            content,
-            &document_record.heading_index,
-        );
+        if thread.anchor.kind != "document" {
+            anchor_service::reattach_anchor(
+                &mut thread.anchor,
+                content,
+                &document_record.heading_index,
+            );
+        }
 
         let reanchor_hash_changed = thread.last_reanchor_content_hash.as_deref()
             != Some(document_record.current_content_hash.as_str());
@@ -210,8 +220,18 @@ pub fn reattach_document_threads(
             }
             thread.last_reanchor_content_hash = Some(document_record.current_content_hash.clone());
             save_thread_record(workspace_root, &thread)?;
+            changed_count += 1;
         }
     }
+
+    #[cfg(debug_assertions)]
+    eprintln!(
+        "[margent timing] reattach_document_threads: scanned={}, document_threads={}, changed={}, elapsed={:.1}ms",
+        scanned_count,
+        document_thread_count,
+        changed_count,
+        start.elapsed().as_secs_f64() * 1000.0
+    );
 
     Ok(())
 }
@@ -405,6 +425,28 @@ pub fn save_thread_record(workspace_root: &Path, thread: &ThreadRecord) -> Resul
     let thread_path = thread_path(workspace_root, &thread.id)?;
     let normalized = normalize_thread_record(thread.clone());
     file_service::write_json_atomic(&thread_path, &normalized)
+}
+
+fn read_scanned_thread_sidecar<T>(path: &Path, sidecar_kind: &str) -> Result<Option<T>, String>
+where
+    T: DeserializeOwned,
+{
+    let text = match fs::read_to_string(path) {
+        Ok(text) => text,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(format!("Unable to read {}: {error}", path.display())),
+    };
+
+    match serde_json::from_str(&text) {
+        Ok(record) => Ok(Some(record)),
+        Err(error) => {
+            eprintln!(
+                "Warning: skipping corrupt {sidecar_kind} sidecar {}: {error}",
+                path.display()
+            );
+            Ok(None)
+        }
+    }
 }
 
 fn normalize_thread_record(mut normalized: ThreadRecord) -> ThreadRecord {
@@ -654,6 +696,60 @@ mod tests {
         .expect("first signature final");
 
         assert_eq!(first_signature_after, first_signature_final);
+
+        fs::remove_dir_all(&workspace_root).expect("cleanup temp workspace");
+    }
+
+    #[test]
+    fn load_threads_skips_corrupt_sibling_sidecar() {
+        let workspace_root = unique_temp_dir("margent-thread-corrupt-sibling");
+        fs::create_dir_all(&workspace_root).expect("create temp workspace");
+
+        let document_path = workspace_root.join("draft.md");
+        fs::write(&document_path, "Alpha beta\n").expect("write document");
+        let workspace =
+            workspace_service::open_workspace(workspace_root.to_str().expect("root str"))
+                .expect("open workspace");
+        let document = workspace.documents.first().expect("document indexed");
+        let valid_thread = create_thread(
+            workspace_root.to_str().expect("root str"),
+            &document.id,
+            "beta",
+            "Tighten this phrase.",
+            AnchorRecord {
+                quote: "beta".into(),
+                prefix_context: "Alpha ".into(),
+                suffix_context: "\n".into(),
+                start_offset_utf16: 6,
+                end_offset_utf16: 10,
+                start_line: 1,
+                start_column: 7,
+                end_line: 1,
+                end_column: 11,
+                heading_path: Vec::new(),
+                block_fingerprint: "sha256:first".into(),
+                base_content_hash: file_service::content_hash("Alpha beta\n"),
+                kind: "text_span".into(),
+                footnote: None,
+                state: "attached".into(),
+                confidence: 1.0,
+            },
+        )
+        .expect("create valid thread");
+
+        let mdreview_path =
+            file_service::ensure_workspace_layout(&workspace_root).expect("workspace layout");
+        fs::write(
+            mdreview_path.join("threads").join("thread_corrupt.json"),
+            "{ not valid json",
+        )
+        .expect("write corrupt thread");
+
+        let threads = load_threads(workspace_root.to_str().expect("root str"), &document.id)
+            .expect("load threads");
+
+        assert_eq!(threads.len(), 1);
+        assert_eq!(threads[0].id, valid_thread.id);
 
         fs::remove_dir_all(&workspace_root).expect("cleanup temp workspace");
     }
