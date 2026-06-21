@@ -103,9 +103,14 @@ function makeProposal(overrides: Partial<ProposalRecord> = {}): ProposalRecord {
   };
 }
 
-function ReviewBriefHarness() {
+function ReviewBriefHarness({
+  onRefreshReviewData,
+}: {
+  onRefreshReviewData?: () => Promise<void>;
+}) {
   const reviewBrief = useReviewBrief({
     activeDocument,
+    onRefreshReviewData,
     workspace,
   });
 
@@ -132,35 +137,24 @@ afterEach(() => {
 });
 
 describe("useReviewBrief", () => {
-  it("uses shared review data on mount and fetches only on explicit refresh", async () => {
+  it("uses shared review data on mount and delegates explicit refresh", async () => {
     const thread = makeThread();
     const proposal = makeProposal();
-
-    invokeBackendMock.mockImplementation(async (command) => {
-      if (command === "load_all_threads") {
-        return [thread];
-      }
-
-      if (command === "load_all_proposals") {
-        return [proposal];
-      }
-
-      throw new Error(`Unexpected command: ${command}`);
+    const refreshReviewData = vi.fn(async () => {
+      useReviewDataStore.getState().setReviewData({
+        proposals: [proposal],
+        threads: [thread],
+      });
     });
 
-    render(createElement(ReviewBriefHarness));
+    render(createElement(ReviewBriefHarness, { onRefreshReviewData: refreshReviewData }));
 
     expect(invokeBackendMock).not.toHaveBeenCalled();
 
     fireEvent.click(screen.getByRole("button", { name: "Refresh" }));
 
-    await waitFor(() => expect(invokeBackendMock).toHaveBeenCalledTimes(2));
-    expect(invokeBackendMock).toHaveBeenNthCalledWith(1, "load_all_threads", {
-      workspaceRoot: workspace.rootPath,
-    });
-    expect(invokeBackendMock).toHaveBeenNthCalledWith(2, "load_all_proposals", {
-      workspaceRoot: workspace.rootPath,
-    });
+    await waitFor(() => expect(refreshReviewData).toHaveBeenCalledTimes(1));
+    expect(invokeBackendMock).not.toHaveBeenCalled();
     expect(useReviewDataStore.getState().threads).toEqual([thread]);
     expect(useReviewDataStore.getState().proposals).toEqual([proposal]);
   });
