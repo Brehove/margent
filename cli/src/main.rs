@@ -17,6 +17,7 @@ use std::sync::mpsc;
 
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use margent_core::deep_link::{document_deep_link, thread_deep_link};
+use margent_core::proposal::ProposalMutationStatus;
 use margent_core::provider_readiness::{inspect_providers, ProviderReadinessStatus};
 use notify::{Config as NotifyConfig, RecommendedWatcher, RecursiveMode, Watcher};
 use serde::Serialize;
@@ -1817,16 +1818,32 @@ fn cmd_proposals(action: ProposalsAction, output: OutputFormat) -> Result<(), St
                 return print_json(&result);
             }
 
-            println!("Proposal {} accepted.", result.proposal.id);
-            if let Some(document) = result.document.as_ref() {
-                println!("Applied to {}.", document.relative_path);
-            }
-            if let Some(snapshot) = result.snapshot.as_ref() {
-                println!("Snapshot saved: {}", snapshot.id);
-                println!(
-                    "Revert with: margent revert-last --document {}",
-                    snapshot.relative_path
-                );
+            match result.status {
+                ProposalMutationStatus::Accepted => {
+                    println!("Proposal {} accepted.", result.proposal.id);
+                    if let Some(document) = result.document.as_ref() {
+                        println!("Applied to {}.", document.relative_path);
+                    }
+                    if let Some(snapshot) = result.snapshot.as_ref() {
+                        println!("Snapshot saved: {}", snapshot.id);
+                        println!(
+                            "Revert with: margent revert-last --document {}",
+                            snapshot.relative_path
+                        );
+                    }
+                }
+                ProposalMutationStatus::Stale => {
+                    println!("Proposal {} is stale.", result.proposal.id);
+                    if let Some(message) = result.message.as_ref() {
+                        println!("{message}");
+                    }
+                }
+                ProposalMutationStatus::Rejected => {
+                    println!("Proposal {} was not accepted.", result.proposal.id);
+                    if let Some(message) = result.message.as_ref() {
+                        println!("{message}");
+                    }
+                }
             }
             Ok(())
         }

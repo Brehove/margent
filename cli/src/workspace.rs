@@ -4,6 +4,7 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use margent_core::change_set::compute_unified_diff;
+use margent_core::proposal::ProposalMutationStatus;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use time::format_description::well_known::Rfc3339;
@@ -32,6 +33,7 @@ pub struct DocumentSnapshotRecord {
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ProposalMutationResultRecord {
+    pub status: ProposalMutationStatus,
     pub proposal: ProposalRecord,
     pub document: Option<DocumentRecord>,
     pub snapshot: Option<DocumentSnapshotRecord>,
@@ -1067,10 +1069,18 @@ pub fn accept_proposal(
         "rejected" => return Err("Rejected proposals cannot be accepted.".into()),
         "failed" => return Err("Failed proposals cannot be accepted.".into()),
         "pending" => {}
-        "stale" => return Err(
-            "This proposal targets an older version of the document and can no longer be applied."
-                .into(),
-        ),
+        "stale" => {
+            return Ok(ProposalMutationResultRecord {
+                status: ProposalMutationStatus::Stale,
+                proposal,
+                document: None,
+                snapshot: None,
+                message: Some(
+                    "This proposal targets an older version of the document and can no longer be applied."
+                        .into(),
+                ),
+            })
+        }
         other => return Err(format!("Unsupported proposal status {other}.")),
     }
 
@@ -1079,10 +1089,16 @@ pub fn accept_proposal(
     let current_hash = content_hash(&current_content);
     if current_hash != proposal.base_content_hash {
         mark_proposal_stale(root, &mut proposal)?;
-        return Err(
-            "The document changed after this proposal was generated, so it was marked stale instead of being applied. Re-run the proposal."
-                .into(),
-        );
+        return Ok(ProposalMutationResultRecord {
+            status: ProposalMutationStatus::Stale,
+            proposal,
+            document: None,
+            snapshot: None,
+            message: Some(
+                "The document changed after this proposal was generated, so it was marked stale instead of being applied."
+                    .into(),
+            ),
+        });
     }
 
     let updated_document_text = edited_document_text
@@ -1129,6 +1145,7 @@ pub fn accept_proposal(
     refresh_pending_proposals_for_document(root, &proposal.document_id, Some(&proposal.id))?;
 
     Ok(ProposalMutationResultRecord {
+        status: ProposalMutationStatus::Accepted,
         proposal,
         document: Some(document),
         snapshot: Some(snapshot),
@@ -1232,6 +1249,7 @@ pub fn reject_proposal(
     )?;
 
     Ok(ProposalMutationResultRecord {
+        status: ProposalMutationStatus::Rejected,
         proposal,
         document: None,
         snapshot: None,
@@ -2373,6 +2391,7 @@ mod tests {
 
         let result = accept_proposal(&root, &proposal.id, None).expect("accept proposal");
 
+        assert_eq!(result.status, ProposalMutationStatus::Accepted);
         assert_eq!(result.proposal.status, "accepted");
         assert_eq!(
             fs::read_to_string(&document_path).expect("read accepted doc"),
@@ -2420,6 +2439,7 @@ mod tests {
 
         let result = accept_proposal(&root, &proposal.id, None).expect("accept proposal");
 
+        assert_eq!(result.status, ProposalMutationStatus::Accepted);
         assert_eq!(result.proposal.status, "accepted");
         let updated_hash = content_hash(updated);
         assert_eq!(
@@ -2490,6 +2510,7 @@ mod tests {
 
         let result = accept_proposal(&root, &proposal.id, None).expect("accept proposal");
 
+        assert_eq!(result.status, ProposalMutationStatus::Accepted);
         assert_eq!(result.proposal.status, "accepted");
         assert_eq!(
             result.proposal.resolve_thread_ids,
@@ -2541,7 +2562,7 @@ mod tests {
     }
 
     #[test]
-    fn accept_proposal_rejects_hash_mismatch_and_marks_stale() {
+    fn accept_proposal_returns_stale_result_on_hash_mismatch() {
         let root = unique_temp_dir("margent-cli-stale-proposal");
         fs::create_dir_all(&root).expect("create temp root");
 
@@ -2576,10 +2597,17 @@ mod tests {
         save_proposal(&root, &proposal).expect("save proposal");
         save_document(&root, "draft.md", "Human edit first.\n").expect("change document");
 
-        let error =
-            accept_proposal(&root, &proposal.id, None).expect_err("hash mismatch should fail");
-        assert!(error.contains("marked stale"));
+        let result =
+            accept_proposal(&root, &proposal.id, None).expect("hash mismatch returns stale result");
 
+        assert_eq!(result.status, ProposalMutationStatus::Stale);
+        assert_eq!(result.proposal.status, "stale");
+        assert!(result.document.is_none());
+        assert!(result.snapshot.is_none());
+        assert!(result
+            .message
+            .as_deref()
+            .is_some_and(|message| message.contains("marked stale")));
         let stale = load_proposal(&root, &proposal.id).expect("load stale proposal");
         assert_eq!(stale.status, "stale");
         assert!(stale

@@ -4,11 +4,12 @@ use crate::models::document::{DocumentPayload, DocumentVersion};
 use crate::models::snapshot::DocumentSnapshotRecord;
 
 pub use margent_core::change_set::ReviewChangeSet;
-pub use margent_core::proposal::ProposalRecord;
+pub use margent_core::proposal::{ProposalMutationStatus, ProposalRecord};
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ProposalMutationResult {
+    pub status: ProposalMutationStatus,
     pub proposal: ProposalRecord,
     pub document: Option<DocumentPayload>,
     pub snapshot: Option<DocumentSnapshotRecord>,
