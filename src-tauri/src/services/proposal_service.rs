@@ -1,3 +1,4 @@
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
@@ -106,6 +107,7 @@ pub fn load_all_proposals(workspace_root: &str) -> Result<Vec<ProposalRecord>, S
     let root_path = Path::new(workspace_root);
     let mdreview_path = file_service::ensure_workspace_layout(root_path)?;
     let documents_dir = mdreview_path.join("documents");
+    let mut document_ids = Vec::new();
 
     for entry in fs::read_dir(&documents_dir)
         .map_err(|error| format!("Unable to read {}: {error}", documents_dir.display()))?
@@ -119,9 +121,10 @@ pub fn load_all_proposals(workspace_root: &str) -> Result<Vec<ProposalRecord>, S
         }
 
         if let Some(document) = read_scanned_sidecar::<DocumentRecord>(&path, "document")? {
-            refresh_pending_proposals_for_document(root_path, &document.id, None)?;
+            document_ids.push(document.id);
         }
     }
+    refresh_pending_proposals_for_documents(root_path, &document_ids, None)?;
 
     let proposals_dir = mdreview_path.join("proposals");
     let mut proposals = Vec::new();
@@ -1010,10 +1013,30 @@ fn refresh_pending_proposals_for_document(
     document_id: &str,
     exclude_proposal_id: Option<&str>,
 ) -> Result<(), String> {
+    refresh_pending_proposals_for_documents(
+        workspace_root,
+        &[document_id.to_string()],
+        exclude_proposal_id,
+    )
+}
+
+fn refresh_pending_proposals_for_documents(
+    workspace_root: &Path,
+    document_ids: &[String],
+    exclude_proposal_id: Option<&str>,
+) -> Result<(), String> {
+    if document_ids.is_empty() {
+        return Ok(());
+    }
+
     let start = Instant::now();
-    let current_content_hash = current_document_hash(workspace_root, document_id)?;
     let mdreview_path = file_service::ensure_workspace_layout(workspace_root)?;
     let proposals_dir = mdreview_path.join("proposals");
+    let document_id_set = document_ids
+        .iter()
+        .map(String::as_str)
+        .collect::<HashSet<_>>();
+    let mut current_hash_by_document_id = HashMap::<String, String>::new();
     let mut scanned_count = 0usize;
     let mut document_proposal_count = 0usize;
     let mut stale_count = 0usize;
@@ -1034,7 +1057,7 @@ fn refresh_pending_proposals_for_document(
             continue;
         };
 
-        if proposal.document_id != document_id {
+        if !document_id_set.contains(proposal.document_id.as_str()) {
             continue;
         }
         document_proposal_count += 1;
@@ -1043,7 +1066,19 @@ fn refresh_pending_proposals_for_document(
             continue;
         }
 
-        if proposal.status == "pending" && proposal.base_content_hash != current_content_hash {
+        if proposal.status != "pending" {
+            continue;
+        }
+
+        if !current_hash_by_document_id.contains_key(&proposal.document_id) {
+            let hash = current_document_hash(workspace_root, &proposal.document_id)?;
+            current_hash_by_document_id.insert(proposal.document_id.clone(), hash);
+        }
+        let current_content_hash = current_hash_by_document_id
+            .get(&proposal.document_id)
+            .expect("current document hash was inserted");
+
+        if proposal.base_content_hash != *current_content_hash {
             mark_proposal_stale(workspace_root, &mut proposal)?;
             stale_count += 1;
         }
@@ -1051,7 +1086,8 @@ fn refresh_pending_proposals_for_document(
 
     #[cfg(debug_assertions)]
     eprintln!(
-        "[margent timing] refresh_pending_proposals_for_document: scanned={}, document_proposals={}, staled={}, elapsed={:.1}ms",
+        "[margent timing] refresh_pending_proposals_for_documents: documents={}, scanned={}, document_proposals={}, staled={}, elapsed={:.1}ms",
+        document_id_set.len(),
         scanned_count,
         document_proposal_count,
         stale_count,
@@ -1955,6 +1991,63 @@ printf '%s' '{"status":"ok","responseMode":"updated_document","assistantMessage"
 
         assert_eq!(proposals.len(), 1);
         assert_eq!(proposals[0].id, valid_proposal.id);
+
+        fs::remove_dir_all(&workspace_root).expect("cleanup temp workspace");
+    }
+
+    #[test]
+    fn load_all_proposals_marks_stale_pending_records_across_documents() {
+        let workspace_root = unique_temp_dir("margent-load-all-proposals-stale");
+        fs::create_dir_all(&workspace_root).expect("create temp workspace");
+
+        let draft_path = workspace_root.join("draft.md");
+        let notes_path = workspace_root.join("notes.md");
+        fs::write(&draft_path, "Draft original.\n").expect("write draft");
+        fs::write(&notes_path, "Notes original.\n").expect("write notes");
+
+        let draft = workspace_service::hydrate_document_record_by_relative_path(
+            &workspace_root,
+            "draft.md",
+        )
+        .expect("hydrate draft");
+        let notes = workspace_service::hydrate_document_record_by_relative_path(
+            &workspace_root,
+            "notes.md",
+        )
+        .expect("hydrate notes");
+
+        let draft_proposal = proposal_record(
+            "proposal_draft",
+            &draft,
+            "Draft revised.\n",
+            Vec::new(),
+            Vec::new(),
+        );
+        let notes_proposal = proposal_record(
+            "proposal_notes",
+            &notes,
+            "Notes revised.\n",
+            Vec::new(),
+            Vec::new(),
+        );
+        save_proposal_record(&workspace_root, &draft_proposal).expect("save draft proposal");
+        save_proposal_record(&workspace_root, &notes_proposal).expect("save notes proposal");
+
+        fs::write(&draft_path, "Draft changed outside Margent.\n").expect("change draft");
+
+        let proposals = load_all_proposals(workspace_root.to_str().expect("root str"))
+            .expect("load all proposals");
+        let draft_status = proposals
+            .iter()
+            .find(|proposal| proposal.id == draft_proposal.id)
+            .map(|proposal| proposal.status.as_str());
+        let notes_status = proposals
+            .iter()
+            .find(|proposal| proposal.id == notes_proposal.id)
+            .map(|proposal| proposal.status.as_str());
+
+        assert_eq!(draft_status, Some("stale"));
+        assert_eq!(notes_status, Some("pending"));
 
         fs::remove_dir_all(&workspace_root).expect("cleanup temp workspace");
     }
