@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { useCallback, useEffect, useMemo, useRef } from "react";
 import { createAnchor, defaultThreadTitle } from "../lib/anchor";
 import { invokeBackend, watchBackend } from "../lib/backend";
 import { getErrorMessage } from "../lib/errorMessage";
@@ -472,18 +472,68 @@ export function useThreads({
     store.selectThread(threadId);
   }
 
-  return {
-    ...store,
-    addReply,
-    createDocumentThread,
-    createThreadFromSelection,
-    deleteThread,
-    loadThread,
-    loadThreads,
-    reopenThread,
-    resolveThread,
-    selectThread,
-  };
+  const stableAddReply = useCallback(
+    (threadId: string, body: string) => addReply(threadId, body),
+    [workspace?.rootPath],
+  );
+  const stableCreateDocumentThread = useCallback(
+    (body: string) => createDocumentThread(body),
+    [activeDocument?.currentContentHash, activeDocument?.id, activeDocument?.relativePath, workspace?.rootPath],
+  );
+  const stableCreateThreadFromSelection = useCallback(
+    (body: string, selection: EditorSelectionSnapshot, content: string) =>
+      createThreadFromSelection(body, selection, content),
+    [activeDocument?.currentContentHash, activeDocument?.id, workspace?.rootPath],
+  );
+  const stableDeleteThread = useCallback(
+    (threadId: string) => deleteThread(threadId),
+    [activeDocument?.id, workspace?.rootPath],
+  );
+  const stableLoadThread = useCallback(
+    (threadId: string | null) => loadThread(threadId),
+    [workspace?.rootPath],
+  );
+  const stableLoadThreads = useCallback(
+    (workspaceRoot = workspace?.rootPath, documentId = activeDocument?.id) =>
+      loadThreads(workspaceRoot, documentId),
+    [activeDocument?.id, workspace?.rootPath],
+  );
+  const stableReopenThread = useCallback(
+    (threadId: string) => reopenThread(threadId),
+    [workspace?.rootPath],
+  );
+  const stableResolveThread = useCallback(
+    (threadId: string) => resolveThread(threadId),
+    [workspace?.rootPath],
+  );
+  const stableSelectThread = useCallback((threadId: string | null) => selectThread(threadId), []);
+
+  return useMemo(
+    () => ({
+      ...store,
+      addReply: stableAddReply,
+      createDocumentThread: stableCreateDocumentThread,
+      createThreadFromSelection: stableCreateThreadFromSelection,
+      deleteThread: stableDeleteThread,
+      loadThread: stableLoadThread,
+      loadThreads: stableLoadThreads,
+      reopenThread: stableReopenThread,
+      resolveThread: stableResolveThread,
+      selectThread: stableSelectThread,
+    }),
+    [
+      stableAddReply,
+      stableCreateDocumentThread,
+      stableCreateThreadFromSelection,
+      stableDeleteThread,
+      stableLoadThread,
+      stableLoadThreads,
+      stableReopenThread,
+      stableResolveThread,
+      stableSelectThread,
+      store,
+    ],
+  );
 }
 
 function documentThreadTitle(body: string) {

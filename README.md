@@ -85,14 +85,14 @@ npm ci
 npm run build
 npm test
 
-cargo test --manifest-path crates/margent-core/Cargo.toml
-cargo test --manifest-path cli/Cargo.toml
-cargo test --manifest-path src-tauri/Cargo.toml
+cargo test --workspace --locked
+cargo clippy --workspace --all-targets --locked -- -D warnings
+cargo fmt --all --check
 
 npm run tauri build
 ```
 
-The built app is written under `src-tauri/target/release/bundle/macos/Margent.app`.
+The built app is written under `target/release/bundle/macos/Margent.app`.
 For an agent-first local install on the Mac that built it, copy the app bundle
 into the user's Applications folder with `ditto`:
 
@@ -100,7 +100,7 @@ into the user's Applications folder with `ditto`:
 osascript -e 'quit app "Margent"' 2>/dev/null || true
 npm run tauri build
 mkdir -p ~/Applications
-ditto src-tauri/target/release/bundle/macos/Margent.app ~/Applications/Margent.app
+ditto target/release/bundle/macos/Margent.app ~/Applications/Margent.app
 open ~/Applications/Margent.app
 ```
 

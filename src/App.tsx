@@ -141,16 +141,22 @@ function App() {
     activeDocument,
     workspace,
   });
+  const {
+    selectThread,
+    upsertThread,
+  } = threadState;
   const proposalState = useProposals({
     activeDocument,
     externalDocument: pendingExternalDocument,
     onDocumentApplied: setActiveDocument,
     workspace,
   });
+  const { upsertProposal } = proposalState;
   const reviewBriefState = useReviewBrief({
     activeDocument,
+    enabled: appView === "review-brief",
     onActiveDocumentApplied: setActiveDocument,
-    onActiveThreadUpdated: threadState.upsertThread,
+    onActiveThreadUpdated: upsertThread,
     workspace,
   });
   const [providerActionState, setProviderActionState] = useState<ProviderActionState>({
@@ -162,6 +168,8 @@ function App() {
     threadId: null,
   });
   const cancelledProviderRunsRef = useRef<Set<string>>(new Set());
+  const providerStreamBufferRef = useRef<Map<string, string>>(new Map());
+  const providerStreamFrameRef = useRef<number | null>(null);
   const [commandPaletteMode, setCommandPaletteMode] = useState<CommandPaletteMode | null>(null);
   const [providerDocumentActionState, setProviderDocumentActionState] =
     useState<ProviderDocumentActionState>({
@@ -172,6 +180,10 @@ function App() {
       runId: null,
       streamedText: "",
     });
+
+  const handleEditorSave = useCallback((content: string) => {
+    void saveCurrentDocument(content);
+  }, []);
 
   const loadProviderReadiness = useCallback(async () => {
     if (!isDesktopBackend()) {
@@ -896,6 +908,29 @@ function App() {
     [checkForUpdates, handlePaletteCommand],
   );
 
+  const flushProviderStreamDeltas = useCallback(() => {
+    providerStreamFrameRef.current = null;
+    const bufferedDeltas = providerStreamBufferRef.current;
+    if (bufferedDeltas.size === 0) {
+      return;
+    }
+
+    providerStreamBufferRef.current = new Map();
+
+    setProviderActionState((current) => {
+      const bufferedText = current.runId ? bufferedDeltas.get(current.runId) : null;
+      return bufferedText
+        ? { ...current, streamedText: `${current.streamedText}${bufferedText}` }
+        : current;
+    });
+    setProviderDocumentActionState((current) => {
+      const bufferedText = current.runId ? bufferedDeltas.get(current.runId) : null;
+      return bufferedText
+        ? { ...current, streamedText: `${current.streamedText}${bufferedText}` }
+        : current;
+    });
+  }, []);
+
   useEffect(() => {
     if (!isDesktopBackend()) {
       return;
@@ -942,16 +977,14 @@ function App() {
         return;
       }
 
-      setProviderActionState((current) =>
-        current.runId === event.payload.runId
-          ? { ...current, streamedText: `${current.streamedText}${event.payload.text}` }
-          : current,
+      providerStreamBufferRef.current.set(
+        event.payload.runId,
+        `${providerStreamBufferRef.current.get(event.payload.runId) ?? ""}${event.payload.text}`,
       );
-      setProviderDocumentActionState((current) =>
-        current.runId === event.payload.runId
-          ? { ...current, streamedText: `${current.streamedText}${event.payload.text}` }
-          : current,
-      );
+
+      if (providerStreamFrameRef.current === null) {
+        providerStreamFrameRef.current = window.requestAnimationFrame(flushProviderStreamDeltas);
+      }
     })
       .then((unlisten) => {
         if (cancelled) {
@@ -965,11 +998,16 @@ function App() {
 
     return () => {
       cancelled = true;
+      if (providerStreamFrameRef.current !== null) {
+        window.cancelAnimationFrame(providerStreamFrameRef.current);
+        providerStreamFrameRef.current = null;
+      }
+      providerStreamBufferRef.current.clear();
       if (stopListening) {
         safeUnlisten(stopListening);
       }
     };
-  }, []);
+  }, [flushProviderStreamDeltas]);
 
   const cancelProviderRun = useCallback(async (runId: string | null) => {
     if (!runId) {
@@ -1092,9 +1130,9 @@ function App() {
           threadId,
           workspaceRoot: workspace.rootPath,
         });
-        threadState.upsertThread(result.thread);
+        upsertThread(result.thread);
         if (result.proposal) {
-          proposalState.upsertProposal(result.proposal);
+          upsertProposal(result.proposal);
         }
       } catch (error) {
         if (cancelledProviderRunsRef.current.has(runId)) {
@@ -1137,9 +1175,9 @@ function App() {
       activeDocument,
       isEditorDirty,
       loadProviderReadiness,
-      proposalState,
       providerSetupMessage,
-      threadState,
+      upsertProposal,
+      upsertThread,
       workspace,
     ],
   );
@@ -1218,10 +1256,10 @@ function App() {
           runId,
           workspaceRoot: workspace.rootPath,
         });
-        threadState.upsertThread(result.thread);
-        threadState.selectThread(result.thread.id);
+        upsertThread(result.thread);
+        selectThread(result.thread.id);
         if (result.proposal) {
-          proposalState.upsertProposal(result.proposal);
+          upsertProposal(result.proposal);
         }
       } catch (error) {
         if (cancelledProviderRunsRef.current.has(runId)) {
@@ -1264,9 +1302,10 @@ function App() {
       activeDocument,
       isEditorDirty,
       loadProviderReadiness,
-      proposalState,
       providerSetupMessage,
-      threadState,
+      selectThread,
+      upsertProposal,
+      upsertThread,
       workspace,
     ],
   );
@@ -1275,9 +1314,9 @@ function App() {
     async (relativePath: string, threadId: string) => {
       setAppView("editor");
       await loadDocument(relativePath);
-      threadState.selectThread(threadId);
+      selectThread(threadId);
     },
-    [threadState],
+    [selectThread],
   );
 
   const openProjectSearchResult = useCallback(async (result: ProjectSearchResult) => {
@@ -1535,7 +1574,7 @@ function App() {
                 onRejectProposal={proposalState.rejectProposal}
                 onRunProviderDocumentAction={runProviderDocumentAction}
                 onRunProviderThreadAction={runProviderThreadAction}
-                onSave={(content) => void saveCurrentDocument(content)}
+                onSave={handleEditorSave}
                 onThreadSelect={threadState.selectThread}
                 providerActionState={providerActionState}
                 providerDocumentActionState={providerDocumentActionState}

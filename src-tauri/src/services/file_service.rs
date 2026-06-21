@@ -9,7 +9,7 @@ use time::format_description::well_known::Rfc3339;
 use time::OffsetDateTime;
 use walkdir::WalkDir;
 
-use crate::models::document::HeadingIndexEntry;
+use crate::models::document::{DocumentRecord, HeadingIndexEntry};
 
 const EXCLUDED_WORKSPACE_DIRS: [&str; 5] = [".mdreview", ".git", "node_modules", "target", "dist"];
 
@@ -77,10 +77,34 @@ pub fn read_scanned_json<T: DeserializeOwned>(
     }
 }
 
+pub fn read_document_record_by_id(
+    root: &Path,
+    document_id: &str,
+) -> Result<Option<DocumentRecord>, String> {
+    let mdreview_path = ensure_workspace_layout(root)?;
+    let record_path = mdreview_path
+        .join("documents")
+        .join(sidecar_file_name(document_id, "Document ID")?);
+
+    read_scanned_json::<DocumentRecord>(&record_path, "document")
+}
+
 pub fn write_json_atomic<T: Serialize>(path: &Path, value: &T) -> Result<(), String> {
     let body = serde_json::to_string_pretty(value)
         .map_err(|error| format!("Unable to serialize {}: {error}", path.display()))?;
     write_string_atomic(path, &format!("{body}\n"))
+}
+
+fn sidecar_file_name(record_id: &str, label: &str) -> Result<String, String> {
+    if record_id.is_empty() || record_id.chars().any(char::is_control) {
+        return Err(format!("{label} is not a valid sidecar id."));
+    }
+
+    if record_id.contains('/') || record_id.contains('\\') {
+        return Err(format!("{label} must not contain path separators."));
+    }
+
+    Ok(format!("{record_id}.json"))
 }
 
 pub fn write_string_atomic(path: &Path, body: &str) -> Result<(), String> {

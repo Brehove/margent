@@ -1,7 +1,8 @@
 import { defaultKeymap, history, historyKeymap, indentWithTab } from "@codemirror/commands";
-import { markdown } from "@codemirror/lang-markdown";
+import { markdown, markdownKeymap } from "@codemirror/lang-markdown";
 import {
   HighlightStyle,
+  LanguageDescription,
   defaultHighlightStyle,
   syntaxTree,
   syntaxHighlighting,
@@ -196,6 +197,69 @@ const REVEAL_NODE_PRIORITIES = new Map<string, number>([
   ["SetextHeading2", 70],
   ["Paragraph", 60],
 ]);
+
+const markdownCodeLanguages = [
+  LanguageDescription.of({
+    name: "JavaScript",
+    alias: ["js", "jsx", "node"],
+    extensions: ["js", "jsx", "mjs", "cjs"],
+    load: () => import("@codemirror/lang-javascript").then((module) => module.javascript({ jsx: true })),
+  }),
+  LanguageDescription.of({
+    name: "TypeScript",
+    alias: ["ts", "tsx"],
+    extensions: ["ts", "tsx"],
+    load: () =>
+      import("@codemirror/lang-javascript").then((module) =>
+        module.javascript({ jsx: true, typescript: true }),
+      ),
+  }),
+  LanguageDescription.of({
+    name: "HTML",
+    alias: ["html", "xhtml"],
+    extensions: ["html", "htm"],
+    load: () => import("@codemirror/lang-html").then((module) => module.html()),
+  }),
+  LanguageDescription.of({
+    name: "CSS",
+    extensions: ["css"],
+    load: () => import("@codemirror/lang-css").then((module) => module.css()),
+  }),
+  LanguageDescription.of({
+    name: "JSON",
+    alias: ["json5"],
+    extensions: ["json", "map"],
+    load: () => import("@codemirror/lang-json").then((module) => module.json()),
+  }),
+  LanguageDescription.of({
+    name: "Python",
+    alias: ["py"],
+    extensions: ["py"],
+    load: () => import("@codemirror/lang-python").then((module) => module.python()),
+  }),
+  LanguageDescription.of({
+    name: "Rust",
+    alias: ["rs"],
+    extensions: ["rs"],
+    load: () => import("@codemirror/lang-rust").then((module) => module.rust()),
+  }),
+  LanguageDescription.of({
+    name: "SQL",
+    extensions: ["sql"],
+    load: () => import("@codemirror/lang-sql").then((module) => module.sql()),
+  }),
+  LanguageDescription.of({
+    name: "YAML",
+    alias: ["yml"],
+    extensions: ["yaml", "yml"],
+    load: () => import("@codemirror/lang-yaml").then((module) => module.yaml()),
+  }),
+  LanguageDescription.of({
+    name: "XML",
+    extensions: ["xml", "svg"],
+    load: () => import("@codemirror/lang-xml").then((module) => module.xml()),
+  }),
+];
 
 const setEditorPresentationMode = StateEffect.define<EditorMode>();
 const editorGutterCompartment = new Compartment();
@@ -1053,7 +1117,7 @@ function collectRenderedFootnoteDefinitionRanges(
 
   const revealRanges = getRevealRangesForState(state);
   const ranges: Range<Decoration>[] = [];
-  const definitions = collectFootnoteDefinitions(state.doc.toString());
+  const definitions = getFootnoteDefinitionsForState(state);
 
   for (const definition of definitions) {
     if (
@@ -1128,7 +1192,7 @@ function collectRenderedFootnoteReferenceRanges(
   const revealRanges = getRevealRangesForState(state);
   const ranges: Range<Decoration>[] = [];
   const seenStarts = new Set<number>();
-  const definedLabels = new Set(collectFootnoteDefinitions(state.doc.toString()).map((definition) => definition.label));
+  const definedLabels = getFootnoteLabelsForState(state);
 
   for (const visibleRange of visibleRanges) {
     const rangeEnd = Math.max(visibleRange.from, visibleRange.to - 1);
@@ -1284,8 +1348,7 @@ function collectRenderedLooseLocalLinkRanges(
     return { atomicRanges, decorations };
   }
 
-  const docText = state.doc.toString();
-  for (const link of collectLooseLocalMarkdownLinks(docText)) {
+  for (const link of getLooseLocalMarkdownLinksForState(state)) {
     if (
       !visibleRanges.some((visibleRange) =>
         rangesOverlap(link.from, link.to, visibleRange.from, visibleRange.to),
@@ -1322,6 +1385,19 @@ interface WikiLinkRange {
   to: number;
 }
 
+const wikiLinksCache = new WeakMap<EditorState, WikiLinkRange[]>();
+
+function getWikiLinksForState(state: EditorState) {
+  const cachedLinks = wikiLinksCache.get(state);
+  if (cachedLinks) {
+    return cachedLinks;
+  }
+
+  const links = collectWikiLinks(getDocumentTextForState(state));
+  wikiLinksCache.set(state, links);
+  return links;
+}
+
 function collectRenderedWikiLinkRanges(
   state: EditorState,
   visibleRanges: readonly VisibleRangeSpec[],
@@ -1334,8 +1410,7 @@ function collectRenderedWikiLinkRanges(
 
   const revealRanges = getRevealRangesForState(state);
   const sourceFallbackRanges = collectRenderedSourceFallbackRanges(state, visibleRanges);
-  const docText = state.doc.toString();
-  for (const link of collectWikiLinks(docText)) {
+  for (const link of getWikiLinksForState(state)) {
     if (
       !visibleRanges.some((visibleRange) =>
         rangesOverlap(link.from, link.to, visibleRange.from, visibleRange.to),
@@ -2085,6 +2160,16 @@ function isInlineEmphasisSyntaxNode(node: SyntaxNode) {
 // requested by most rendered-mode collectors in one projection build; memoize
 // so each state computes them once. Cached arrays are read-only to callers.
 const revealRangesCache = new WeakMap<EditorState, RevealRangeSpec[]>();
+const documentTextCache = new WeakMap<EditorState, string>();
+const footnoteDefinitionsCache = new WeakMap<
+  EditorState,
+  ReturnType<typeof collectFootnoteDefinitions>
+>();
+const footnoteLabelsCache = new WeakMap<EditorState, Set<string>>();
+const looseLocalMarkdownLinksCache = new WeakMap<
+  EditorState,
+  ReturnType<typeof collectLooseLocalMarkdownLinks>
+>();
 
 function getRevealRangesForState(state: EditorState) {
   const cachedRanges = revealRangesCache.get(state);
@@ -2102,6 +2187,69 @@ function getRevealRangesForState(state: EditorState) {
   const mergedRanges = mergeRevealRanges(revealRanges);
   revealRangesCache.set(state, mergedRanges);
   return mergedRanges;
+}
+
+function getDocumentTextForState(state: EditorState) {
+  const cachedText = documentTextCache.get(state);
+  if (cachedText !== undefined) {
+    return cachedText;
+  }
+
+  const text = state.doc.toString();
+  documentTextCache.set(state, text);
+  return text;
+}
+
+function getFootnoteDefinitionsForState(state: EditorState) {
+  const cachedDefinitions = footnoteDefinitionsCache.get(state);
+  if (cachedDefinitions) {
+    return cachedDefinitions;
+  }
+
+  const definitions = collectFootnoteDefinitions(getDocumentTextForState(state));
+  footnoteDefinitionsCache.set(state, definitions);
+  return definitions;
+}
+
+function getFootnoteLabelsForState(state: EditorState) {
+  const cachedLabels = footnoteLabelsCache.get(state);
+  if (cachedLabels) {
+    return cachedLabels;
+  }
+
+  const labels = new Set(
+    getFootnoteDefinitionsForState(state).map((definition) => definition.label),
+  );
+  footnoteLabelsCache.set(state, labels);
+  return labels;
+}
+
+function getLooseLocalMarkdownLinksForState(state: EditorState) {
+  const cachedLinks = looseLocalMarkdownLinksCache.get(state);
+  if (cachedLinks) {
+    return cachedLinks;
+  }
+
+  const links = collectLooseLocalMarkdownLinks(getDocumentTextForState(state));
+  looseLocalMarkdownLinksCache.set(state, links);
+  return links;
+}
+
+function revealRangesEqual(left: readonly RevealRangeSpec[], right: readonly RevealRangeSpec[]) {
+  if (left === right) {
+    return true;
+  }
+
+  if (left.length !== right.length) {
+    return false;
+  }
+
+  return left.every(
+    (range, index) =>
+      range.from === right[index]?.from &&
+      range.to === right[index]?.to &&
+      range.kind === right[index]?.kind,
+  );
 }
 
 function getRevealRangesForSelection(
@@ -2360,8 +2508,10 @@ const renderedMarkdownPlugin = ViewPlugin.fromClass(
   class {
     decorations: DecorationSet;
     atomicRanges: DecorationSet;
+    revealRanges: RevealRangeSpec[];
 
     constructor(view: EditorView) {
+      this.revealRanges = getRevealRangesForState(view.state);
       const projection = buildRenderedMarkdownProjection(
         view.state,
         view.visibleRanges,
@@ -2397,6 +2547,21 @@ const renderedMarkdownPlugin = ViewPlugin.fromClass(
           return;
         }
 
+        if (
+          update.selectionSet &&
+          !update.docChanged &&
+          !update.viewportChanged &&
+          !update.geometryChanged &&
+          !modeChanged &&
+          !pointerSelectionChanged
+        ) {
+          const nextRevealRanges = getRevealRangesForState(update.state);
+          if (revealRangesEqual(this.revealRanges, nextRevealRanges)) {
+            this.revealRanges = nextRevealRanges;
+            return;
+          }
+        }
+
         const projection = buildRenderedMarkdownProjection(
           update.state,
           update.view.visibleRanges,
@@ -2404,6 +2569,7 @@ const renderedMarkdownPlugin = ViewPlugin.fromClass(
         );
         this.decorations = projection.decorations;
         this.atomicRanges = projection.atomicRanges;
+        this.revealRanges = getRevealRangesForState(update.state);
       }
     }
   },
@@ -2415,8 +2581,10 @@ const renderedMarkdownPlugin = ViewPlugin.fromClass(
 const focusModePlugin = ViewPlugin.fromClass(
   class {
     decorations: DecorationSet;
+    revealRanges: RevealRangeSpec[];
 
     constructor(view: EditorView) {
+      this.revealRanges = getRevealRangesForState(view.state);
       this.decorations = buildFocusModeDecorations(
         view.state,
         view.visibleRanges,
@@ -2435,11 +2603,26 @@ const focusModePlugin = ViewPlugin.fromClass(
         update.selectionSet ||
         focusModeChanged
       ) {
+        if (
+          update.selectionSet &&
+          !update.docChanged &&
+          !update.viewportChanged &&
+          !update.geometryChanged &&
+          !focusModeChanged
+        ) {
+          const nextRevealRanges = getRevealRangesForState(update.state);
+          if (revealRangesEqual(this.revealRanges, nextRevealRanges)) {
+            this.revealRanges = nextRevealRanges;
+            return;
+          }
+        }
+
         this.decorations = buildFocusModeDecorations(
           update.state,
           update.view.visibleRanges,
           isEditorFocusModeActive(update.state),
         );
+        this.revealRanges = getRevealRangesForState(update.state);
       }
     }
   },
@@ -2949,8 +3132,8 @@ const baseExtensions = [
   EditorState.allowMultipleSelections.of(true),
   EditorView.lineWrapping,
   search({ top: true }),
-  keymap.of([...searchKeymap, indentWithTab, ...defaultKeymap, ...historyKeymap]),
-  markdown(),
+  keymap.of([...searchKeymap, indentWithTab, ...markdownKeymap, ...defaultKeymap, ...historyKeymap]),
+  markdown({ codeLanguages: markdownCodeLanguages }),
   syntaxHighlighting(defaultHighlightStyle),
   syntaxHighlighting(markdownHighlightStyle),
   editorPresentationModeField,
@@ -3558,7 +3741,9 @@ export function useCodeMirror({
                 update.docChanged ||
                 update.viewportChanged ||
                 update.geometryChanged ||
-                update.transactions.length > 0
+                update.transactions.some((transaction) =>
+                  transaction.effects.some((effect) => effect.is(replaceThreadPresentation)),
+                )
               );
             },
             markers(layerView) {
@@ -4201,9 +4386,11 @@ function buildThreadLayerMarkers(
   selectedThreadId: string | null,
   onSelectThread?: (threadId: string | null) => void,
 ) {
+  const scrollRect = view.scrollDOM.getBoundingClientRect();
   const rowEntries = threadPresentation.placements
+    .filter((placement) => isThreadPlacementVisible(placement, view.visibleRanges))
     .map((placement) => {
-      const top = getThreadMarkerTop(view, placement.anchorFrom);
+      const top = getThreadMarkerTop(view, placement.anchorFrom, scrollRect);
       if (top === null) {
         return null;
       }
@@ -4224,7 +4411,8 @@ function buildThreadLayerMarkers(
     groupedRows.set(rowKey, group);
   });
 
-  const railRight = view.scrollDOM.scrollLeft + view.scrollDOM.clientWidth - THREAD_MARKER_RIGHT_GAP_PX;
+  const railRight =
+    view.scrollDOM.scrollLeft + view.scrollDOM.clientWidth - THREAD_MARKER_RIGHT_GAP_PX;
 
   return [...groupedRows.values()].flatMap((group) => {
     const sortedGroup = [...group].sort(
@@ -4256,15 +4444,28 @@ function buildThreadLayerMarkers(
   });
 }
 
-function getThreadMarkerTop(view: EditorView, anchorFrom: number) {
+function isThreadPlacementVisible(
+  placement: ThreadPlacement,
+  visibleRanges: readonly VisibleRangeSpec[],
+) {
+  return visibleRanges.some(
+    (visibleRange) =>
+      placement.anchorFrom >= visibleRange.from && placement.anchorFrom <= visibleRange.to,
+  );
+}
+
+function getThreadMarkerTop(view: EditorView, anchorFrom: number, scrollRect: DOMRect) {
   const position = clampPosition(anchorFrom, view.state.doc.length);
   const coords = view.coordsAtPos(position, 1) ?? view.coordsAtPos(position, -1);
   if (!coords) {
     return null;
   }
 
-  const scrollRect = view.scrollDOM.getBoundingClientRect();
-  return view.scrollDOM.scrollTop + (coords.top - scrollRect.top) / view.scaleY + THREAD_MARKER_TOP_OFFSET_PX;
+  return (
+    view.scrollDOM.scrollTop +
+    (coords.top - scrollRect.top) / view.scaleY +
+    THREAD_MARKER_TOP_OFFSET_PX
+  );
 }
 
 export function getNextSelectedThreadId(threadIds: string[], selectedThreadId: string | null) {
@@ -4400,8 +4601,7 @@ function safePosAtCoords(view: EditorView, coords: { x: number; y: number }) {
 }
 
 function findLooseLocalMarkdownLinkAtRange(state: EditorState, from: number, to: number) {
-  const docText = state.doc.toString();
-  for (const link of collectLooseLocalMarkdownLinks(docText)) {
+  for (const link of getLooseLocalMarkdownLinksForState(state)) {
     if (from >= link.from && to <= link.to) {
       return link;
     }
@@ -4742,9 +4942,7 @@ function readActiveFootnoteReferenceAtSelection(
   from: number,
   to: number,
 ): VisibleRangeSpec | null {
-  const definedLabels = new Set(
-    collectFootnoteDefinitions(state.doc.toString()).map((definition) => definition.label),
-  );
+  const definedLabels = getFootnoteLabelsForState(state);
   const selection: EditorSelectionSnapshot = {
     endColumn: 0,
     endLine: 0,
@@ -4754,7 +4952,7 @@ function readActiveFootnoteReferenceAtSelection(
     startLine: 0,
     startOffsetUtf16: from,
   };
-  const match = classifyFootnoteSelection(state.doc.toString(), selection);
+  const match = classifyFootnoteSelection(getDocumentTextForState(state), selection);
 
   if (!match || match.kind !== "footnote_reference") {
     return null;
@@ -4801,7 +4999,7 @@ function readActiveFootnoteDefinitionAtSelection(
     startLine: 0,
     startOffsetUtf16: from,
   };
-  const match = classifyFootnoteSelection(state.doc.toString(), selection);
+  const match = classifyFootnoteSelection(getDocumentTextForState(state), selection);
 
   if (!match || match.kind !== "footnote_definition") {
     return null;
