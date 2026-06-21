@@ -444,7 +444,7 @@ describe("buildRenderedMarkdownDecorations", () => {
     expect(styledRanges).toEqual([]);
   });
 
-  it("keeps wikilink source visible while its paragraph is active", () => {
+  it("keeps wikilink source hidden while its paragraph is active", () => {
     const doc = "See [[Project Note|the note]] here.\n\nTrailing";
     const state = EditorState.create({
       doc,
@@ -471,8 +471,8 @@ describe("buildRenderedMarkdownDecorations", () => {
       }
     });
 
-    expect(hiddenRanges).not.toContain("[[Project Note|");
-    expect(styledRanges).not.toContain("the note");
+    expect(hiddenRanges).toContain("[[Project Note|");
+    expect(styledRanges).toContain("the note");
   });
 
   it("styles document-opening YAML frontmatter as metadata lines", () => {
@@ -611,7 +611,7 @@ describe("buildRenderedMarkdownDecorations", () => {
     host.remove();
   });
 
-  it("keeps task list markers visible on the active list item", () => {
+  it("keeps task list markers rendered on the active list item", () => {
     const doc = "# Tasks\n\n- [ ] todo\n";
     const taskLineStart = doc.indexOf("[ ]");
     const state = EditorState.create({
@@ -639,11 +639,11 @@ describe("buildRenderedMarkdownDecorations", () => {
       }
     });
 
-    expect(hiddenRanges).not.toContain("[ ]");
-    expect(widgets.filter((widget) => getWidgetName(widget) === "TaskCheckboxWidget")).toHaveLength(0);
+    expect(hiddenRanges).toContain("[ ]");
+    expect(widgets.filter((widget) => getWidgetName(widget) === "TaskCheckboxWidget")).toHaveLength(1);
   });
 
-  it("keeps non-link syntax visible on the active line in rendered mode", () => {
+  it("keeps inline markdown syntax hidden on the active line in rendered mode", () => {
     const doc = "Paragraph with *em* and [label](https://x.test)";
     const state = EditorState.create({
       doc,
@@ -676,7 +676,7 @@ describe("buildRenderedMarkdownDecorations", () => {
     expect(hiddenRanges).toContain("https://x.test");
   });
 
-  it("reveals the whole active paragraph block in rendered mode", () => {
+  it("keeps active paragraph inline syntax rendered in rendered mode", () => {
     const doc = [
       "Paragraph with [label](https://x.test)",
       "continued on the next line",
@@ -714,7 +714,7 @@ describe("buildRenderedMarkdownDecorations", () => {
     expect(hiddenRanges).toContain("*");
   });
 
-  it("reveals the whole active list item in rendered mode", () => {
+  it("keeps active list item inline syntax rendered in rendered mode", () => {
     const doc = ["- first [label](https://x.test)", "- second *emphasis*"].join("\n");
     const state = EditorState.create({
       doc,
@@ -866,7 +866,7 @@ describe("buildRenderedMarkdownDecorations", () => {
     ).toBe(true);
   });
 
-  it("keeps fenced code blocks raw while the caret is inside them", () => {
+  it("keeps fenced code block chrome rendered while the caret is inside content", () => {
     const doc = ["```ts", "const x = 1", "```", "", "Trailing"].join("\n");
     const state = EditorState.create({
       doc,
@@ -898,14 +898,14 @@ describe("buildRenderedMarkdownDecorations", () => {
       }
     });
 
-    expect(hiddenRanges).not.toContain("```ts");
-    expect(hiddenRanges).not.toContain("```");
+    expect(hiddenRanges).toContain("```ts");
+    expect(hiddenRanges).toContain("```");
     expect(
       widgets.filter((widget) => getWidgetName(widget) === "CodeBlockLanguageWidget"),
-    ).toHaveLength(0);
+    ).toHaveLength(1);
   });
 
-  it("keeps active markdown tables in styled raw/source form", () => {
+  it("keeps active markdown tables in rendered preview form", () => {
     const doc = ["| name | link |", "| --- | --- |", "| item | [label](https://x.test) |"].join("\n");
     const state = EditorState.create({
       doc,
@@ -920,24 +920,19 @@ describe("buildRenderedMarkdownDecorations", () => {
     );
 
     const hiddenRanges: string[] = [];
-    const lineClasses: string[] = [];
     const widgets: string[] = [];
     decorations.between(0, state.doc.length, (from, to, decoration) => {
       if (decoration.spec.class === "cm-md-syntax-hidden") {
         hiddenRanges.push(state.doc.sliceString(from, to));
-      }
-      if (from === to && typeof decoration.spec.attributes?.class === "string") {
-        lineClasses.push(decoration.spec.attributes.class);
       }
       if (decoration.spec.widget) {
         widgets.push(getWidgetName(decoration.spec.widget));
       }
     });
 
-    expect(hiddenRanges).not.toContain("[");
-    expect(hiddenRanges).not.toContain("https://x.test");
-    expect(lineClasses.some((className) => className.includes("cm-md-table-header"))).toBe(true);
-    expect(lineClasses.some((className) => className.includes("cm-md-table-divider"))).toBe(true);
+    expect(hiddenRanges).toContain(doc);
+    expect(hiddenRanges.join("")).toContain("https://x.test");
+    expect(widgets).toContain("MarkdownTablePreviewWidget");
     expect(widgets).not.toContain("MarkdownTableBlockWidget");
   });
 
@@ -1364,7 +1359,7 @@ describe("buildRenderedMarkdownDecorations", () => {
     expect(hiddenRanges).not.toContain("    ");
   });
 
-  it("reveals the whole footnote definition block from the definition marker boundary", () => {
+  it("keeps footnote definition syntax hidden from the definition marker boundary", () => {
     const doc = ["# Heading", "Body[^1]", "", "[^1]: First line", "    continuation line"].join(
       "\n",
     );
@@ -1389,8 +1384,8 @@ describe("buildRenderedMarkdownDecorations", () => {
       }
     });
 
-    expect(hiddenRanges).not.toContain("[^1]: ");
-    expect(hiddenRanges).not.toContain("    ");
+    expect(hiddenRanges).toContain("[^1]: ");
+    expect(hiddenRanges).toContain("    ");
   });
 
   it("does not style footnote-like literals inside inline code or fenced code", () => {

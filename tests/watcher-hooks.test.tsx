@@ -155,6 +155,12 @@ function ThreadsHarness({
   return null;
 }
 
+function ThreadsSelectorHarness({ onRender }: { onRender: () => void }) {
+  useThreads({ activeDocument: null, enabled: false, workspace: null });
+  onRender();
+  return null;
+}
+
 function makeWatchEvent(overrides: Partial<WatchEvent> = {}): WatchEvent {
   return {
     type: {
@@ -760,6 +766,28 @@ describe("workspace watcher behavior", () => {
     });
 
     expect(invokeMock).not.toHaveBeenCalled();
+  });
+});
+
+describe("thread hook subscriptions", () => {
+  it("ignores selectionRevision-only store updates", () => {
+    const onRender = vi.fn();
+
+    render(createElement(ThreadsSelectorHarness, { onRender }));
+
+    expect(onRender).toHaveBeenCalledTimes(1);
+
+    act(() => {
+      useThreadStore.getState().selectThread(null);
+    });
+
+    expect(onRender).toHaveBeenCalledTimes(1);
+
+    act(() => {
+      useThreadStore.getState().setIsSaving(true);
+    });
+
+    expect(onRender).toHaveBeenCalledTimes(2);
   });
 });
 

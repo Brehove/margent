@@ -22,7 +22,19 @@ export function useThreads({
   enabled = true,
   workspace,
 }: UseThreadsOptions) {
-  const store = useThreadStore();
+  const errorMessage = useThreadStore((state) => state.errorMessage);
+  const isThreadLoading = useThreadStore((state) => state.isLoading);
+  const isSaving = useThreadStore((state) => state.isSaving);
+  const selectedThreadId = useThreadStore((state) => state.selectedThreadId);
+  const threads = useThreadStore((state) => state.threads);
+  const removeThreadFromStore = useThreadStore((state) => state.removeThread);
+  const resetThreadStore = useThreadStore((state) => state.reset);
+  const selectThreadInStore = useThreadStore((state) => state.selectThread);
+  const setThreadErrorMessage = useThreadStore((state) => state.setErrorMessage);
+  const setThreadIsLoading = useThreadStore((state) => state.setIsLoading);
+  const setThreadIsSaving = useThreadStore((state) => state.setIsSaving);
+  const setThreadsInStore = useThreadStore((state) => state.setThreads);
+  const upsertThreadInStore = useThreadStore((state) => state.upsertThread);
   const reviewThreads = useReviewDataStore((state) => state.threads);
   const reviewIsLoading = useReviewDataStore((state) => state.isLoading);
   const setDocumentThreads = useReviewDataStore((state) => state.setDocumentThreads);
@@ -35,12 +47,19 @@ export function useThreads({
     }
 
     if (!workspace || !activeDocument) {
-      useThreadStore.getState().reset();
+      resetThreadStore();
       return;
     }
 
-    useThreadStore.getState().setThreads(threadsForDocument(reviewThreads, activeDocument.id));
-  }, [activeDocument?.id, enabled, reviewThreads, workspace?.rootPath]);
+    setThreadsInStore(threadsForDocument(reviewThreads, activeDocument.id));
+  }, [
+    activeDocument?.id,
+    enabled,
+    resetThreadStore,
+    reviewThreads,
+    setThreadsInStore,
+    workspace?.rootPath,
+  ]);
 
   useEffect(() => {
     if (!enabled) {
@@ -64,7 +83,7 @@ export function useThreads({
         return;
       }
 
-      useThreadStore.getState().selectThread(target.threadId);
+      selectThreadInStore(target.threadId);
     });
 
     window.addEventListener("focus", refreshOnAppReturn);
@@ -83,7 +102,7 @@ export function useThreads({
 
       refreshOnAppReturn();
     }
-  }, [activeDocument?.relativePath, enabled, workspace?.rootPath]);
+  }, [activeDocument?.relativePath, enabled, selectThreadInStore, workspace?.rootPath]);
 
   async function fetchThreads(
     workspaceRoot = workspace?.rootPath,
@@ -118,17 +137,17 @@ export function useThreads({
       return;
     }
 
-    store.setIsLoading(true);
-    store.setErrorMessage(null);
+    setThreadIsLoading(true);
+    setThreadErrorMessage(null);
 
     try {
       const threads = await fetchThreads(workspaceRoot, documentId);
       setDocumentThreads(documentId, threads);
-      store.setThreads(threads);
+      setThreadsInStore(threads);
     } catch (error) {
-      store.setErrorMessage(getErrorMessage(error, "Unable to load threads for this document."));
+      setThreadErrorMessage(getErrorMessage(error, "Unable to load threads for this document."));
     } finally {
-      store.setIsLoading(false);
+      setThreadIsLoading(false);
     }
   }
 
@@ -137,8 +156,8 @@ export function useThreads({
       return;
     }
 
-    store.setIsSaving(true);
-    store.setErrorMessage(null);
+    setThreadIsSaving(true);
+    setThreadErrorMessage(null);
 
     try {
       const thread = await invokeBackend<ThreadRecord>("create_thread", {
@@ -149,11 +168,11 @@ export function useThreads({
         workspaceRoot: workspace.rootPath,
       });
       upsertReviewThread(thread);
-      store.upsertThread(thread);
+      upsertThreadInStore(thread);
     } catch (error) {
-      store.setErrorMessage(getErrorMessage(error, "Unable to create a new thread."));
+      setThreadErrorMessage(getErrorMessage(error, "Unable to create a new thread."));
     } finally {
-      store.setIsSaving(false);
+      setThreadIsSaving(false);
     }
   }
 
@@ -194,8 +213,8 @@ export function useThreads({
       suffixContext: "",
     };
 
-    store.setIsSaving(true);
-    store.setErrorMessage(null);
+    setThreadIsSaving(true);
+    setThreadErrorMessage(null);
 
     try {
       const thread = await invokeBackend<ThreadRecord>("create_thread", {
@@ -206,12 +225,12 @@ export function useThreads({
         workspaceRoot: workspace.rootPath,
       });
       upsertReviewThread(thread);
-      store.upsertThread(thread);
-      store.selectThread(thread.id);
+      upsertThreadInStore(thread);
+      selectThreadInStore(thread.id);
     } catch (error) {
-      store.setErrorMessage(getErrorMessage(error, "Unable to create a document comment."));
+      setThreadErrorMessage(getErrorMessage(error, "Unable to create a document comment."));
     } finally {
-      store.setIsSaving(false);
+      setThreadIsSaving(false);
     }
   }
 
@@ -220,8 +239,8 @@ export function useThreads({
       return;
     }
 
-    store.setIsSaving(true);
-    store.setErrorMessage(null);
+    setThreadIsSaving(true);
+    setThreadErrorMessage(null);
 
     try {
       const thread = await invokeBackend<ThreadRecord>("add_thread_message", {
@@ -231,11 +250,11 @@ export function useThreads({
         workspaceRoot: workspace.rootPath,
       });
       upsertReviewThread(thread);
-      store.upsertThread(thread);
+      upsertThreadInStore(thread);
     } catch (error) {
-      store.setErrorMessage(getErrorMessage(error, "Unable to add a reply to this thread."));
+      setThreadErrorMessage(getErrorMessage(error, "Unable to add a reply to this thread."));
     } finally {
-      store.setIsSaving(false);
+      setThreadIsSaving(false);
     }
   }
 
@@ -244,8 +263,8 @@ export function useThreads({
       return;
     }
 
-    store.setIsSaving(true);
-    store.setErrorMessage(null);
+    setThreadIsSaving(true);
+    setThreadErrorMessage(null);
 
     try {
       const thread = await invokeBackend<ThreadRecord>("resolve_thread", {
@@ -253,11 +272,11 @@ export function useThreads({
         workspaceRoot: workspace.rootPath,
       });
       upsertReviewThread(thread);
-      store.upsertThread(thread);
+      upsertThreadInStore(thread);
     } catch (error) {
-      store.setErrorMessage(getErrorMessage(error, "Unable to resolve this thread."));
+      setThreadErrorMessage(getErrorMessage(error, "Unable to resolve this thread."));
     } finally {
-      store.setIsSaving(false);
+      setThreadIsSaving(false);
     }
   }
 
@@ -266,8 +285,8 @@ export function useThreads({
       return;
     }
 
-    store.setIsSaving(true);
-    store.setErrorMessage(null);
+    setThreadIsSaving(true);
+    setThreadErrorMessage(null);
 
     try {
       await invokeBackend<ThreadRecord>("delete_thread", {
@@ -275,11 +294,11 @@ export function useThreads({
         workspaceRoot: workspace.rootPath,
       });
       removeReviewThread(threadId);
-      store.removeThread(threadId);
+      removeThreadFromStore(threadId);
     } catch (error) {
-      store.setErrorMessage(getErrorMessage(error, "Unable to delete this thread."));
+      setThreadErrorMessage(getErrorMessage(error, "Unable to delete this thread."));
     } finally {
-      store.setIsSaving(false);
+      setThreadIsSaving(false);
     }
   }
 
@@ -288,8 +307,8 @@ export function useThreads({
       return;
     }
 
-    store.setIsSaving(true);
-    store.setErrorMessage(null);
+    setThreadIsSaving(true);
+    setThreadErrorMessage(null);
 
     try {
       const thread = await invokeBackend<ThreadRecord>("reopen_thread", {
@@ -297,11 +316,11 @@ export function useThreads({
         workspaceRoot: workspace.rootPath,
       });
       upsertReviewThread(thread);
-      store.upsertThread(thread);
+      upsertThreadInStore(thread);
     } catch (error) {
-      store.setErrorMessage(getErrorMessage(error, "Unable to reopen this thread."));
+      setThreadErrorMessage(getErrorMessage(error, "Unable to reopen this thread."));
     } finally {
-      store.setIsSaving(false);
+      setThreadIsSaving(false);
     }
   }
 
@@ -309,13 +328,13 @@ export function useThreads({
     const thread = await fetchThread(workspace?.rootPath, threadId);
     if (thread) {
       upsertReviewThread(thread);
-      store.upsertThread(thread);
+      upsertThreadInStore(thread);
     }
     return thread;
   }
 
   function selectThread(threadId: string | null) {
-    store.selectThread(threadId);
+    selectThreadInStore(threadId);
   }
 
   const stableAddReply = useCallback(
@@ -356,8 +375,18 @@ export function useThreads({
 
   return useMemo(
     () => ({
-      ...store,
-      isLoading: store.isLoading || reviewIsLoading,
+      errorMessage,
+      isLoading: isThreadLoading || reviewIsLoading,
+      isSaving,
+      removeThread: removeThreadFromStore,
+      reset: resetThreadStore,
+      selectedThreadId,
+      setErrorMessage: setThreadErrorMessage,
+      setIsLoading: setThreadIsLoading,
+      setIsSaving: setThreadIsSaving,
+      setThreads: setThreadsInStore,
+      threads,
+      upsertThread: upsertThreadInStore,
       addReply: stableAddReply,
       createDocumentThread: stableCreateDocumentThread,
       createThreadFromSelection: stableCreateThreadFromSelection,
@@ -378,8 +407,19 @@ export function useThreads({
       stableReopenThread,
       stableResolveThread,
       stableSelectThread,
-      store,
+      errorMessage,
+      isSaving,
+      isThreadLoading,
+      removeThreadFromStore,
       reviewIsLoading,
+      resetThreadStore,
+      selectedThreadId,
+      setThreadErrorMessage,
+      setThreadIsLoading,
+      setThreadIsSaving,
+      setThreadsInStore,
+      threads,
+      upsertThreadInStore,
     ],
   );
 }
