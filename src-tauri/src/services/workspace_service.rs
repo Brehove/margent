@@ -78,7 +78,7 @@ pub fn open_workspace(path: &str) -> Result<WorkspaceSnapshot, String> {
                 .map_err(|error| format!("Unable to read {}: {error}", markdown_file.display()))?;
             upsert_document_record(&root_path, &relative_path, &content)?
         } else {
-            summarize_document_without_content(&root_path, &relative_path, &markdown_file)?
+            summarize_document_without_content(&relative_path, &markdown_file)?
         };
         documents.push(record);
     }
@@ -874,17 +874,10 @@ fn upsert_document_record(
 }
 
 fn summarize_document_without_content(
-    root_path: &Path,
     relative_path: &str,
     document_path: &Path,
 ) -> Result<DocumentRecord, String> {
     let document_id = file_service::document_id(relative_path);
-    if let Some(record) = read_document_record(root_path, &document_id)? {
-        if record.relative_path == relative_path {
-            return Ok(record);
-        }
-    }
-
     let metadata = fs::metadata(document_path)
         .map_err(|error| format!("Unable to inspect {}: {error}", document_path.display()))?;
     let modified_ns = metadata
@@ -1147,6 +1140,7 @@ fn remove_file_if_exists(path: &Path) -> Result<(), String> {
 mod tests {
     use std::time::{SystemTime, UNIX_EPOCH};
 
+    use crate::models::document::HeadingIndexEntry;
     use crate::models::proposal::ProposalRecord;
     use crate::models::thread::AnchorRecord;
 
@@ -1270,6 +1264,58 @@ mod tests {
                 .and_then(|value| value.to_str()),
             Some(expected_sidecar_name.as_str())
         );
+
+        fs::remove_dir_all(&workspace_root).expect("cleanup temp workspace");
+    }
+
+    #[test]
+    fn open_workspace_does_not_read_unselected_document_sidecars() {
+        let workspace_root = unique_temp_dir("margent-lazy-open-stale-sidecar");
+        fs::create_dir_all(&workspace_root).expect("create temp workspace");
+        let opened_path = workspace_root.join("open.md");
+        fs::write(&opened_path, "# Open\n\nAlpha beta\n").expect("write opened");
+        fs::write(
+            workspace_root.join("closed.md"),
+            "# Closed\n\nGamma delta\n",
+        )
+        .expect("write closed");
+        let stale_closed_record = DocumentRecord {
+            schema_version: 1,
+            id: file_service::document_id("closed.md"),
+            relative_path: "closed.md".into(),
+            display_name: "closed.md".into(),
+            created_at: "2026-06-11T00:00:00Z".into(),
+            updated_at: "2026-06-11T00:00:00Z".into(),
+            current_content_hash: "sha256:stale-sidecar".into(),
+            last_known_line_ending: "lf".into(),
+            frontmatter_mode: "none".into(),
+            word_count: 99,
+            heading_index: vec![HeadingIndexEntry {
+                depth: 1,
+                line: 1,
+                text: "Stale".into(),
+            }],
+        };
+        let mdreview = file_service::ensure_workspace_layout(&workspace_root).expect("layout");
+        file_service::write_json_atomic(
+            &mdreview
+                .join("documents")
+                .join(format!("{}.json", stale_closed_record.id)),
+            &stale_closed_record,
+        )
+        .expect("write stale sidecar");
+
+        let workspace =
+            open_workspace(opened_path.to_str().expect("opened path")).expect("open workspace");
+
+        let closed = workspace
+            .documents
+            .iter()
+            .find(|document| document.relative_path == "closed.md")
+            .expect("closed document");
+        assert!(closed.current_content_hash.starts_with("unindexed:"));
+        assert_eq!(closed.word_count, 0);
+        assert!(closed.heading_index.is_empty());
 
         fs::remove_dir_all(&workspace_root).expect("cleanup temp workspace");
     }
