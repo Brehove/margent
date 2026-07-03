@@ -1,5 +1,6 @@
 pub mod agent;
 pub mod anchor;
+pub mod assets;
 pub mod authorship;
 pub mod change_set;
 pub mod critic_markup;

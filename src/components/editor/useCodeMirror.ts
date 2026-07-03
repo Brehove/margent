@@ -32,6 +32,7 @@ import {
   keymap,
   layer,
   lineNumbers,
+  placeholder,
   ViewPlugin,
   type ViewUpdate,
   WidgetType,
@@ -46,6 +47,24 @@ import type { EditorMode } from "../../stores/uiStore";
 import type { EditorSelectionSnapshot } from "../../types/thread";
 import type { ThreadRecord } from "../../types/thread";
 import {
+  areFormattingContextsEqual,
+  emptyFormattingContext,
+  getFormattingContext,
+  runMarkdownFormattingCommand,
+  type MarkdownFormattingCommand,
+  type MarkdownFormattingContext,
+} from "./markdownFormatting";
+import {
+  deleteMarkdownTableColumn,
+  deleteMarkdownTableRow,
+  insertMarkdownTableColumn,
+  insertMarkdownTableRow,
+  moveMarkdownTableCell,
+  setMarkdownTableColumnAlignment,
+  tidyMarkdownTable,
+  type MarkdownTableCommand,
+} from "./markdownTable";
+import {
   getProposalHunkAnchorPosition,
   proposalReviewDecorationsField,
   setProposalReviewEditorState,
@@ -54,9 +73,11 @@ import {
 
 interface UseCodeMirrorOptions {
   editorMode?: EditorMode;
+  editorZoomPercent?: number;
   initialValue: string;
   isFocusModeEnabled?: boolean;
   onActiveFootnoteDefinitionChange?: (footnoteDefinition: ActiveFootnoteDefinition | null) => void;
+  onActiveImageChange?: (image: ActiveMarkdownImage | null) => void;
   onActiveLinkChange?: (link: ActiveMarkdownLink | null) => void;
   onCreateLinkRequested?: (selection: EditorSelectionSnapshot) => void;
   onFocusModeTypingActivity?: () => void;
@@ -79,14 +100,23 @@ export interface CodeMirrorSession {
       url: string;
     },
   ) => void;
+  formatMarkdown: (command: MarkdownFormattingCommand) => void;
+  formatMarkdownTable: (command: MarkdownTableCommand) => void;
   focus: () => void;
   focusFootnoteDefinition: (footnoteDefinition: ActiveFootnoteDefinition) => void;
+  getFormattingContext: () => MarkdownFormattingContext;
   getCharacterCount: () => number;
   getContent: () => string;
   getRangeRect: (from: number, to: number) => EditorViewportRect | null;
   getLineCount: () => number;
   getRevision: () => number;
   getSelectionSnapshot: () => EditorSelectionSnapshot | null;
+  insertMarkdownImages: (
+    images: Array<{
+      fileName: string;
+      relativePath: string;
+    }>,
+  ) => void;
   isDirty: () => boolean;
   markClean: () => void;
   openSearch: () => void;
@@ -108,6 +138,13 @@ export interface CodeMirrorSession {
       url: string;
     },
   ) => void;
+  updateMarkdownImage: (
+    image: ActiveMarkdownImage,
+    nextValues: {
+      alt: string;
+      width: string | null;
+    },
+  ) => void;
 }
 
 export interface CodeMirrorSessionSnapshot {
@@ -118,6 +155,7 @@ export interface CodeMirrorSessionSnapshot {
 export interface CodeMirrorSessionMetrics {
   characterCount: number;
   lineCount: number;
+  wordCount: number;
 }
 
 export interface EditorViewportRect {
@@ -131,7 +169,7 @@ export interface EditorViewportRect {
 
 const SESSION_METRICS_UPDATE_DELAY_MS = 180;
 const EMPTY_MARKDOWN_PASTE_PATTERN = /^[\s\\]*$/;
-const SUPPORTED_IMAGE_MIME_PATTERN = /^image\/(png|jpe?g|gif|webp|avif)$/i;
+const SUPPORTED_IMAGE_MIME_PATTERN = /^image\/(png|jpe?g|gif|webp|avif|svg\+xml)$/i;
 let pendingImageInsertionId = 0;
 
 const HEADING_MARKER_PATTERN = /^(?:\s{0,3})(#{1,6})(?:[ \t]+|$)/;
@@ -142,7 +180,7 @@ const TASK_LIST_PATTERN = /^(\s*(?:[-+*]|\d+[.)])\s+)\[([ xX])\](?=\s|$)/;
 const THEMATIC_BREAK_PATTERN = /^\s{0,3}(?:(?:-\s*){3,}|(?:_\s*){3,}|(?:\*\s*){3,})$/;
 const CODE_FENCE_PATTERN = /^\s*(?:`{3,}|~{3,})/;
 const FOOTNOTE_REFERENCE_PATTERN = /\[\^([^\]\r\n]+)\]/g;
-const MARKDOWN_IMAGE_LINE_PATTERN = /^(\s*)!\[([^\]\r\n]*)\]\(([^)\r\n]*)\)(\s*)$/;
+const MARKDOWN_IMAGE_LINE_PATTERN = /^(\s*)!\[([^\]\r\n]*)\]\(([^)\r\n]*)\)(\{[^\r\n}]*\})?(\s*)$/;
 const LOOSE_LOCAL_MARKDOWN_LINK_PATTERN =
   /\[([^\]\r\n]+)\]\(((?:~|\/|\.{1,2}\/)[^)\r\n]*\s[^)\r\n]*)\)/g;
 const WIKILINK_PATTERN = /\[\[([^\]\r\n|]+)(?:\|([^\]\r\n]+))?\]\]/g;
@@ -402,6 +440,25 @@ export interface ActiveMarkdownLink {
   urlTo: number;
 }
 
+export interface ActiveMarkdownImage {
+  alt: string;
+  attrs: MarkdownImageAttribute[];
+  from: number;
+  indent: string;
+  rawDestination: string;
+  source: string;
+  title: string | null;
+  to: number;
+  trailing: string;
+  width: string | null;
+}
+
+export interface MarkdownImageAttribute {
+  key: string;
+  raw: string;
+  value: string | null;
+}
+
 export interface ActiveFootnoteDefinition {
   blockContent: string;
   content: string;
@@ -426,19 +483,37 @@ class MarkdownMarkerWidget extends WidgetType {
   constructor(
     private readonly text: string,
     private readonly className: string,
+    private readonly contentFrom: number,
   ) {
     super();
   }
 
   eq(other: MarkdownMarkerWidget) {
-    return this.text === other.text && this.className === other.className;
+    return (
+      this.text === other.text &&
+      this.className === other.className &&
+      this.contentFrom === other.contentFrom
+    );
   }
 
-  toDOM() {
+  toDOM(view?: EditorView) {
     const span = document.createElement("span");
     span.className = this.className;
     span.textContent = this.text;
     span.setAttribute("aria-hidden", "true");
+    span.addEventListener("mousedown", (event) => {
+      if (!view || event.button !== 0) {
+        return;
+      }
+
+      event.preventDefault();
+      view.dispatch({
+        selection: {
+          anchor: this.contentFrom,
+        },
+      });
+      view.focus();
+    });
     return span;
   }
 }
@@ -513,6 +588,7 @@ class MarkdownImageBlockWidget extends WidgetType {
     private readonly source: string,
     private readonly renderedSource: string,
     private readonly alt: string,
+    private readonly width: string | null,
     private readonly from: number,
   ) {
     super();
@@ -523,6 +599,7 @@ class MarkdownImageBlockWidget extends WidgetType {
       this.source === other.source &&
       this.renderedSource === other.renderedSource &&
       this.alt === other.alt &&
+      this.width === other.width &&
       this.from === other.from
     );
   }
@@ -549,6 +626,9 @@ class MarkdownImageBlockWidget extends WidgetType {
     image.alt = this.alt;
     image.draggable = false;
     image.src = this.renderedSource;
+    if (this.width) {
+      image.style.width = normalizedCssImageWidth(this.width);
+    }
     wrapper.append(image);
 
     if (this.alt.trim()) {
@@ -562,10 +642,16 @@ class MarkdownImageBlockWidget extends WidgetType {
   }
 }
 
+interface MarkdownTablePreviewCell {
+  contentFrom: number;
+  contentTo: number;
+  text: string;
+}
+
 interface MarkdownTablePreview {
   alignments: Array<"center" | "left" | "right" | null>;
-  headers: string[];
-  rows: string[][];
+  headers: MarkdownTablePreviewCell[];
+  rows: MarkdownTablePreviewCell[][];
   source: string;
 }
 
@@ -573,25 +659,44 @@ class MarkdownTablePreviewWidget extends WidgetType {
   constructor(
     private readonly preview: MarkdownTablePreview,
     private readonly from: number,
+    private readonly to: number,
   ) {
     super();
   }
 
   eq(other: MarkdownTablePreviewWidget) {
-    return this.from === other.from && this.preview.source === other.preview.source;
+    return (
+      this.from === other.from &&
+      this.to === other.to &&
+      this.preview.source === other.preview.source
+    );
   }
 
   toDOM(view: EditorView) {
     const wrapper = document.createElement("div");
     wrapper.className = "cm-md-table-block";
-    wrapper.title = "Click to edit Markdown table source";
+    wrapper.tabIndex = 0;
+    wrapper.title = "Edit Markdown table";
     wrapper.addEventListener("mousedown", (event) => {
-      if (event.button !== 0) {
+      const target = event.target;
+      if (target instanceof Element && target.closest("input, button")) {
+        return;
+      }
+
+      event.preventDefault();
+      selectMarkdownTableSource(view, this.from, this.to);
+    });
+    wrapper.addEventListener("keydown", (event) => {
+      if (event.key !== "Backspace" && event.key !== "Delete") {
         return;
       }
 
       event.preventDefault();
       view.dispatch({
+        changes: {
+          from: this.from,
+          to: this.to,
+        },
         selection: {
           anchor: this.from,
         },
@@ -602,31 +707,132 @@ class MarkdownTablePreviewWidget extends WidgetType {
     const table = document.createElement("table");
     const thead = document.createElement("thead");
     const headerRow = document.createElement("tr");
-    this.preview.headers.forEach((cellText, index) => {
-      const cell = document.createElement("th");
-      applyTableCellAlignment(cell, this.preview.alignments[index] ?? null);
-      cell.textContent = cellText;
-      headerRow.append(cell);
+    this.preview.headers.forEach((cell, index) => {
+      const tableCell = document.createElement("th");
+      applyTableCellAlignment(tableCell, this.preview.alignments[index] ?? null);
+      tableCell.append(createMarkdownTableCellInput(view, cell, `Header ${index + 1}`));
+      headerRow.append(tableCell);
     });
     thead.append(headerRow);
     table.append(thead);
 
     const tbody = document.createElement("tbody");
-    this.preview.rows.forEach((row) => {
+    this.preview.rows.forEach((row, rowIndex) => {
       const tableRow = document.createElement("tr");
       const columnCount = Math.max(this.preview.headers.length, row.length);
       for (let index = 0; index < columnCount; index += 1) {
-        const cell = document.createElement("td");
-        applyTableCellAlignment(cell, this.preview.alignments[index] ?? null);
-        cell.textContent = row[index] ?? "";
-        tableRow.append(cell);
+        const tableCell = document.createElement("td");
+        applyTableCellAlignment(tableCell, this.preview.alignments[index] ?? null);
+        const cell = row[index] ?? {
+          contentFrom: this.to,
+          contentTo: this.to,
+          text: "",
+        };
+        tableCell.append(
+          createMarkdownTableCellInput(view, cell, `Row ${rowIndex + 1}, column ${index + 1}`),
+        );
+        tableRow.append(tableCell);
       }
       tbody.append(tableRow);
     });
     table.append(tbody);
     wrapper.append(table);
+
+    const actions = document.createElement("div");
+    actions.className = "cm-md-table-actions";
+    const deleteButton = document.createElement("button");
+    deleteButton.className = "cm-md-table-action-button";
+    deleteButton.textContent = "Delete";
+    deleteButton.type = "button";
+    deleteButton.addEventListener("click", (event) => {
+      event.preventDefault();
+      view.dispatch({
+        changes: {
+          from: this.from,
+          to: this.to,
+        },
+        selection: {
+          anchor: this.from,
+        },
+      });
+      view.focus();
+    });
+    actions.append(deleteButton);
+    wrapper.append(actions);
+
     return wrapper;
   }
+
+  ignoreEvent() {
+    return true;
+  }
+}
+
+function createMarkdownTableCellInput(
+  view: EditorView,
+  cell: MarkdownTablePreviewCell,
+  label: string,
+) {
+  const input = document.createElement("input");
+  input.className = "cm-md-table-cell-input";
+  input.type = "text";
+  input.value = cell.text;
+  input.setAttribute("aria-label", label);
+  input.spellcheck = true;
+
+  const selectCellSource = () => {
+    view.dispatch({
+      selection: {
+        anchor: cell.contentFrom,
+        head: cell.contentTo,
+      },
+    });
+  };
+  const commit = () => {
+    const nextText = escapeMarkdownTableCellInput(input.value);
+    if (nextText === view.state.doc.sliceString(cell.contentFrom, cell.contentTo)) {
+      return;
+    }
+
+    view.dispatch({
+      changes: {
+        from: cell.contentFrom,
+        insert: nextText,
+        to: cell.contentTo,
+      },
+      selection: {
+        anchor: cell.contentFrom,
+        head: cell.contentFrom + nextText.length,
+      },
+    });
+  };
+
+  input.addEventListener("focus", selectCellSource);
+  input.addEventListener("change", commit);
+  input.addEventListener("blur", commit);
+  input.addEventListener("keydown", (event) => {
+    if (event.key === "Enter") {
+      event.preventDefault();
+      input.blur();
+    } else if (event.key === "Escape") {
+      event.preventDefault();
+      input.value = cell.text;
+      input.blur();
+    }
+  });
+
+  return input;
+}
+
+function selectMarkdownTableSource(view: EditorView, from: number, to: number) {
+  view.dispatch({
+    selection: EditorSelection.range(from, to),
+  });
+  view.focus();
+}
+
+function escapeMarkdownTableCellInput(value: string) {
+  return value.replace(/\r?\n/g, " ").replace(/\|/g, "\\|");
 }
 
 function applyTableCellAlignment(
@@ -636,6 +842,23 @@ function applyTableCellAlignment(
   if (alignment) {
     element.style.textAlign = alignment;
   }
+}
+
+function applyEditorZoom(view: EditorView, zoomPercent: number) {
+  const normalizedZoomPercent =
+    Number.isFinite(zoomPercent) && zoomPercent > 0 ? zoomPercent : 100;
+  const scale = normalizedZoomPercent / 100;
+  view.dom.style.setProperty("--editor-zoom", `${scale}`);
+  view.dom.style.setProperty("--editor-body-font-size", `${16 * scale}px`);
+  view.dom.style.setProperty("--editor-readable-font-size", `${17 * scale}px`);
+  view.dom.style.setProperty("--editor-h1-font-size", `${30 * scale}px`);
+  view.dom.style.setProperty("--editor-h2-font-size", `${24 * scale}px`);
+  view.dom.style.setProperty("--editor-h3-font-size", `${20 * scale}px`);
+  view.dom.style.setProperty("--editor-h4-font-size", `${17 * scale}px`);
+  view.dom.style.setProperty("--editor-h5-font-size", `${15 * scale}px`);
+  view.dom.style.setProperty("--editor-h6-font-size", `${13 * scale}px`);
+  view.dom.style.setProperty("--editor-code-font-size", `${13.5 * scale}px`);
+  view.requestMeasure();
 }
 
 export function classifyReadableMarkdownLine(text: string): string[] {
@@ -699,6 +922,37 @@ export function buildMarkdownImageBlockInsertion(
   fileName: string,
 ) {
   const imageMarkdown = `![${markdownImageAltFromFileName(fileName)}](${relativePath})`;
+  const before = state.doc.sliceString(Math.max(0, from - 2), from);
+  const after = state.doc.sliceString(to, Math.min(state.doc.length, to + 2));
+  const prefix =
+    from === 0 ? "" : before.endsWith("\n\n") ? "" : before.endsWith("\n") ? "\n" : "\n\n";
+  const suffix =
+    to === state.doc.length
+      ? ""
+      : after.startsWith("\n\n")
+        ? ""
+        : after.startsWith("\n")
+          ? "\n"
+          : "\n\n";
+
+  return {
+    anchor: from + prefix.length + imageMarkdown.length,
+    insert: `${prefix}${imageMarkdown}${suffix}`,
+  };
+}
+
+export function buildMarkdownImageBlocksInsertion(
+  state: EditorState,
+  from: number,
+  to: number,
+  images: Array<{
+    fileName: string;
+    relativePath: string;
+  }>,
+) {
+  const imageMarkdown = images
+    .map((image) => `![${markdownImageAltFromFileName(image.fileName)}](${image.relativePath})`)
+    .join("\n\n");
   const before = state.doc.sliceString(Math.max(0, from - 2), from);
   const after = state.doc.sliceString(to, Math.min(state.doc.length, to + 2));
   const prefix =
@@ -858,7 +1112,6 @@ function buildRenderedMarkdownProjection(
       ranges.push(...taskListRanges.decorations);
       ranges.push(...footnoteDefinitionRanges);
       ranges.push(...footnoteReferenceRanges);
-      atomicRanges.push(...hiddenSyntaxRanges);
       atomicRanges.push(...looseLocalLinkRanges.atomicRanges);
       atomicRanges.push(...wikiLinkRanges.atomicRanges);
       atomicRanges.push(...fencedCodeRanges.atomicRanges);
@@ -1321,6 +1574,14 @@ function collectRenderedMarkdownSyntaxRanges(
         if (node.name === "ListMark" && !isTaskListLineAt(state, node.from)) {
           const markerText = state.doc.sliceString(node.from, node.to);
           const renderedMarkerText = markerText.match(/^\d+[.)]/)?.[0] ?? "•";
+          const line = state.doc.lineAt(node.from);
+          let contentFrom = node.to;
+          while (
+            contentFrom < line.to &&
+            /\s/.test(state.doc.sliceString(contentFrom, contentFrom + 1))
+          ) {
+            contentFrom += 1;
+          }
           const widgetClassName =
             renderedMarkerText === "•"
               ? "cm-md-list-marker-widget"
@@ -1328,7 +1589,7 @@ function collectRenderedMarkdownSyntaxRanges(
           ranges.push(
             Decoration.widget({
               side: -1,
-              widget: new MarkdownMarkerWidget(renderedMarkerText, widgetClassName),
+              widget: new MarkdownMarkerWidget(renderedMarkerText, widgetClassName, contentFrom),
             }).range(node.from),
           );
         }
@@ -1608,6 +1869,7 @@ function collectRenderedMarkdownImageBlockRanges(
           image.source,
           resolveSource(image.source),
           image.alt,
+          image.width,
           line.from,
         ),
       }).range(line.from),
@@ -1624,14 +1886,22 @@ function parseStandaloneMarkdownImageLine(text: string) {
     return null;
   }
 
-  const source = extractMarkdownImageDestination(match[3] ?? "");
+  const rawDestination = match[3] ?? "";
+  const source = extractMarkdownImageDestination(rawDestination);
   if (!source) {
     return null;
   }
+  const attrs = parseMarkdownImageAttributes(match[4] ?? "");
 
   return {
+    attrs,
     alt: match[2] ?? "",
+    indent: match[1] ?? "",
+    rawDestination,
     source,
+    title: extractMarkdownImageTitle(rawDestination),
+    trailing: match[5] ?? "",
+    width: readMarkdownImageWidth(attrs),
   };
 }
 
@@ -1649,15 +1919,145 @@ function extractMarkdownImageDestination(rawDestination: string) {
   return trimmed.split(/\s+/)[0] ?? "";
 }
 
-function getFirstSupportedImageFile(dataTransfer: DataTransfer | null | undefined) {
-  if (!dataTransfer) {
-    return null;
+function extractMarkdownImageTitle(rawDestination: string) {
+  const trimmed = rawDestination.trim();
+  const titleMatch = trimmed.match(/\s+(?:"([^"]*)"|'([^']*)'|\(([^)]*)\))\s*$/);
+  return titleMatch ? (titleMatch[1] ?? titleMatch[2] ?? titleMatch[3] ?? "") : null;
+}
+
+function parseMarkdownImageAttributes(rawAttributes: string): MarkdownImageAttribute[] {
+  const trimmed = rawAttributes.trim();
+  if (!trimmed.startsWith("{") || !trimmed.endsWith("}")) {
+    return [];
   }
 
-  return (
-    Array.from(dataTransfer.files).find((file) => SUPPORTED_IMAGE_MIME_PATTERN.test(file.type)) ??
-    null
+  const body = trimmed.slice(1, -1).trim();
+  if (!body) {
+    return [];
+  }
+
+  return body.split(/\s+/).map((raw) => {
+    const equalsIndex = raw.indexOf("=");
+    if (equalsIndex === -1) {
+      return {
+        key: raw,
+        raw,
+        value: null,
+      };
+    }
+
+    return {
+      key: raw.slice(0, equalsIndex),
+      raw,
+      value: raw.slice(equalsIndex + 1).replace(/^["']|["']$/g, ""),
+    };
+  });
+}
+
+function formatMarkdownImageAttributes(attrs: MarkdownImageAttribute[]) {
+  return attrs.length ? `{${attrs.map((attr) => attr.raw).join(" ")}}` : "";
+}
+
+function readMarkdownImageWidth(attrs: MarkdownImageAttribute[]) {
+  return attrs.find((attr) => attr.key === "width")?.value ?? null;
+}
+
+function setMarkdownImageWidth(attrs: MarkdownImageAttribute[], width: string | null) {
+  const nextAttrs = attrs.filter((attr) => attr.key !== "width");
+  const normalizedWidth = normalizeMarkdownImageWidth(width);
+  if (normalizedWidth) {
+    nextAttrs.push({
+      key: "width",
+      raw: `width=${normalizedWidth}`,
+      value: normalizedWidth,
+    });
+  }
+  return nextAttrs;
+}
+
+function normalizeMarkdownImageWidth(width: string | null) {
+  const trimmed = width?.trim() ?? "";
+  if (!trimmed) {
+    return null;
+  }
+  if (/^\d+(?:\.\d+)?(?:px|%|in|cm|mm)$/i.test(trimmed)) {
+    return trimmed;
+  }
+  if (/^\d+(?:\.\d+)?$/.test(trimmed)) {
+    return `${trimmed}px`;
+  }
+  return null;
+}
+
+function normalizedCssImageWidth(width: string) {
+  const normalizedWidth = normalizeMarkdownImageWidth(width);
+  return normalizedWidth ?? width;
+}
+
+export function buildMarkdownImageLineReplacement(
+  image: ActiveMarkdownImage,
+  nextValues: {
+    alt: string;
+    width: string | null;
+  },
+) {
+  const attrs = setMarkdownImageWidth(image.attrs, nextValues.width);
+  return `${image.indent}![${escapeMarkdownImageAlt(nextValues.alt)}](${image.rawDestination})${formatMarkdownImageAttributes(attrs)}${image.trailing}`;
+}
+
+function escapeMarkdownImageAlt(value: string) {
+  return value.replace(/\\/g, "\\\\").replace(/\[/g, "\\[").replace(/\]/g, "\\]");
+}
+
+function runMarkdownTableCommand(view: EditorView, command: MarkdownTableCommand) {
+  switch (command) {
+    case "row-above":
+      return insertMarkdownTableRow(view, "above");
+    case "row-below":
+      return insertMarkdownTableRow(view, "below");
+    case "column-left":
+      return insertMarkdownTableColumn(view, "left");
+    case "column-right":
+      return insertMarkdownTableColumn(view, "right");
+    case "delete-row":
+      return deleteMarkdownTableRow(view);
+    case "delete-column":
+      return deleteMarkdownTableColumn(view);
+    case "align-left":
+      return setMarkdownTableColumnAlignment(view, "left");
+    case "align-center":
+      return setMarkdownTableColumnAlignment(view, "center");
+    case "align-right":
+      return setMarkdownTableColumnAlignment(view, "right");
+    case "align-none":
+      return setMarkdownTableColumnAlignment(view, "none");
+    case "tidy":
+      return tidyMarkdownTable(view);
+  }
+}
+
+function getSupportedImageFiles(dataTransfer: DataTransfer | null | undefined) {
+  if (!dataTransfer) {
+    return [];
+  }
+
+  return Array.from(dataTransfer.files).filter((file) =>
+    SUPPORTED_IMAGE_MIME_PATTERN.test(file.type),
   );
+}
+
+function isPlainHttpUrl(value: string) {
+  const trimmed = value.trim();
+  if (!/^https?:\/\/\S+$/i.test(trimmed)) {
+    return false;
+  }
+
+  try {
+    const url = new URL(trimmed);
+    return url.protocol === "http:" || url.protocol === "https:";
+  } catch {
+    return false;
+  }
 }
 
 function findPendingImageInsertionRange(state: EditorState, id: string) {
@@ -1705,6 +2105,71 @@ export async function importImageFileAtSelection(
       relativePath,
       file.name,
     );
+
+    view.dispatch({
+      changes: {
+        from,
+        insert: insertion.insert,
+        to,
+      },
+      effects: removePendingImageInsertionRange.of(id),
+      selection: {
+        anchor: insertion.anchor,
+      },
+    });
+    view.focus();
+  } catch (error) {
+    view.dispatch({
+      effects: removePendingImageInsertionRange.of(id),
+    });
+    throw error;
+  }
+}
+
+export async function importImageFilesAtSelection(
+  view: EditorView,
+  files: File[],
+  importImageAsset: (file: File) => Promise<string>,
+  position?: number | null,
+) {
+  if (files.length === 0) {
+    return;
+  }
+
+  const id = `image-import-${++pendingImageInsertionId}`;
+  const selection =
+    typeof position === "number"
+      ? {
+          from: clampPosition(position, view.state.doc.length),
+          to: clampPosition(position, view.state.doc.length),
+        }
+      : view.state.selection.main;
+
+  view.dispatch({
+    effects: addPendingImageInsertionRange.of({
+      from: selection.from,
+      id,
+      to: selection.to,
+    }),
+  });
+
+  try {
+    const importedImages: Array<{ fileName: string; relativePath: string }> = [];
+    for (const file of files) {
+      importedImages.push({
+        fileName: file.name,
+        relativePath: await importImageAsset(file),
+      });
+    }
+
+    const pendingRange = findPendingImageInsertionRange(view.state, id);
+    if (!pendingRange) {
+      return;
+    }
+
+    const from = clampPosition(pendingRange.from, view.state.doc.length);
+    const to = Math.max(from, clampPosition(pendingRange.to, view.state.doc.length));
+    const insertion = buildMarkdownImageBlocksInsertion(view.state, from, to, importedImages);
 
     view.dispatch({
       changes: {
@@ -1879,7 +2344,6 @@ function collectRenderedMarkdownTableRanges(
   }
 
   const ranges: Range<Decoration>[] = [];
-  const revealRanges = getRevealRangesForState(state);
   for (const tableRange of collectMarkdownTableRanges(state)) {
     if (
       !visibleRanges.some((visibleRange) =>
@@ -1892,13 +2356,13 @@ function collectRenderedMarkdownTableRanges(
     const canRenderPreview = visibleRanges.some(
       (visibleRange) => tableRange.from >= visibleRange.from && tableRange.from <= visibleRange.to,
     );
-    if (canRenderPreview && !isMarkdownSyntaxNodeVisible(tableRange.from, tableRange.to, revealRanges)) {
+    if (canRenderPreview) {
       const preview = buildMarkdownTablePreview(state, tableRange);
       if (preview) {
         ranges.push(
           Decoration.widget({
             side: -1,
-            widget: new MarkdownTablePreviewWidget(preview, tableRange.from),
+            widget: new MarkdownTablePreviewWidget(preview, tableRange.from, tableRange.to),
           }).range(tableRange.from),
         );
         ranges.push(hiddenMarkdownSyntaxDecoration.range(tableRange.from, tableRange.to));
@@ -1930,15 +2394,18 @@ function buildMarkdownTablePreview(
 ): MarkdownTablePreview | null {
   const headerLine = state.doc.line(tableRange.startLine);
   const dividerLine = state.doc.line(tableRange.startLine + 1);
-  const headers = splitMarkdownTableRow(headerLine.text).map(cleanMarkdownTableCell);
-  const alignments = splitMarkdownTableRow(dividerLine.text).map(readMarkdownTableAlignment);
+  const headers = splitMarkdownTableRow(headerLine.text, headerLine.from).map(cleanMarkdownTableCell);
+  const alignments = splitMarkdownTableRow(dividerLine.text, dividerLine.from).map((cell) =>
+    readMarkdownTableAlignment(cell.raw),
+  );
   if (headers.length < 2 || alignments.length < 2) {
     return null;
   }
 
-  const rows: string[][] = [];
+  const rows: MarkdownTablePreviewCell[][] = [];
   for (let lineNumber = tableRange.startLine + 2; lineNumber <= tableRange.endLine; lineNumber += 1) {
-    rows.push(splitMarkdownTableRow(state.doc.line(lineNumber).text).map(cleanMarkdownTableCell));
+    const line = state.doc.line(lineNumber);
+    rows.push(splitMarkdownTableRow(line.text, line.from).map(cleanMarkdownTableCell));
   }
 
   return {
@@ -1949,22 +2416,34 @@ function buildMarkdownTablePreview(
   };
 }
 
-function splitMarkdownTableRow(text: string) {
-  let trimmed = text.trim();
-  if (trimmed.startsWith("|")) {
-    trimmed = trimmed.slice(1);
+function splitMarkdownTableRow(text: string, lineFrom: number) {
+  let startOffset = 0;
+  let endOffset = text.length;
+  if (text.trimStart().startsWith("|")) {
+    startOffset = text.indexOf("|") + 1;
   }
-  if (trimmed.endsWith("|")) {
-    trimmed = trimmed.slice(0, -1);
+  if (text.trimEnd().endsWith("|")) {
+    endOffset = text.lastIndexOf("|");
   }
 
-  const cells: string[] = [];
+  const cells: Array<{
+    from: number;
+    raw: string;
+    to: number;
+  }> = [];
   let current = "";
+  let currentFrom = startOffset;
   let isEscaped = false;
-  for (const character of trimmed) {
+  for (let index = startOffset; index < endOffset; index += 1) {
+    const character = text[index] ?? "";
     if (character === "|" && !isEscaped) {
-      cells.push(current);
+      cells.push({
+        from: currentFrom,
+        raw: current,
+        to: index,
+      });
       current = "";
+      currentFrom = index + 1;
       continue;
     }
 
@@ -1974,12 +2453,29 @@ function splitMarkdownTableRow(text: string) {
       isEscaped = false;
     }
   }
-  cells.push(current);
-  return cells;
+  cells.push({
+    from: currentFrom,
+    raw: current,
+    to: endOffset,
+  });
+
+  return cells.map((cell) => ({
+    from: lineFrom + cell.from,
+    raw: cell.raw,
+    to: lineFrom + cell.to,
+  }));
 }
 
-function cleanMarkdownTableCell(text: string) {
-  return text.trim().replace(/\\\|/g, "|").replace(/\s+/g, " ");
+function cleanMarkdownTableCell(cell: { from: number; raw: string; to: number }): MarkdownTablePreviewCell {
+  const leadingWhitespaceLength = cell.raw.match(/^[ \t]*/)?.[0].length ?? 0;
+  const trailingWhitespaceLength = cell.raw.match(/[ \t]*$/)?.[0].length ?? 0;
+  const rawContentEnd = Math.max(leadingWhitespaceLength, cell.raw.length - trailingWhitespaceLength);
+  const rawContent = cell.raw.slice(leadingWhitespaceLength, rawContentEnd);
+  return {
+    contentFrom: cell.from + leadingWhitespaceLength,
+    contentTo: cell.from + rawContentEnd,
+    text: rawContent.replace(/\\\|/g, "|").replace(/\s+/g, " "),
+  };
 }
 
 function readMarkdownTableAlignment(text: string): "center" | "left" | "right" | null {
@@ -2105,6 +2601,10 @@ function shouldHideMarkdownSyntaxNode(
   }
 
   if (isInlineMarkdownLinkSyntaxNode(state, node) || isInlineEmphasisSyntaxNode(node)) {
+    return true;
+  }
+
+  if (node.name === "HeaderMark" || node.name === "ListMark" || node.name === "QuoteMark") {
     return true;
   }
 
@@ -2654,25 +3154,25 @@ export const markdownHighlightStyle = HighlightStyle.define([
   },
   {
     tag: tags.heading1,
-    fontSize: "30px",
+    fontSize: "var(--editor-h1-font-size, 30px)",
     lineHeight: "1.25",
   },
   {
     tag: tags.heading2,
-    fontSize: "24px",
+    fontSize: "var(--editor-h2-font-size, 24px)",
     lineHeight: "1.3",
     letterSpacing: "-0.01em",
   },
   {
     tag: tags.heading3,
-    fontSize: "20px",
+    fontSize: "var(--editor-h3-font-size, 20px)",
     lineHeight: "1.4",
     letterSpacing: "0",
   },
   {
     tag: tags.heading4,
     fontFamily: "var(--font-body)",
-    fontSize: "17px",
+    fontSize: "var(--editor-h4-font-size, 17px)",
     fontWeight: "600",
     lineHeight: "1.75",
     letterSpacing: "0",
@@ -2680,7 +3180,7 @@ export const markdownHighlightStyle = HighlightStyle.define([
   {
     tag: tags.heading5,
     fontFamily: "var(--font-body)",
-    fontSize: "15px",
+    fontSize: "var(--editor-h5-font-size, 15px)",
     fontWeight: "600",
     lineHeight: "1.75",
     letterSpacing: "0",
@@ -2688,7 +3188,7 @@ export const markdownHighlightStyle = HighlightStyle.define([
   {
     tag: tags.heading6,
     fontFamily: "var(--font-body)",
-    fontSize: "13px",
+    fontSize: "var(--editor-h6-font-size, 13px)",
     fontWeight: "500",
     lineHeight: "1.75",
     letterSpacing: "0.05em",
@@ -2750,7 +3250,7 @@ const margentReadableTheme = EditorView.theme({
   ".cm-scroller": {
     overflow: "auto",
     fontFamily: "var(--font-body)",
-    fontSize: "17px",
+    fontSize: "var(--editor-readable-font-size, 17px)",
     fontVariantNumeric: "lining-nums",
     lineHeight: "1.75",
   },
@@ -2802,7 +3302,7 @@ const margentReadableTheme = EditorView.theme({
     backgroundColor: "var(--editor-code-wash)",
     color: "var(--editor-code-ink)",
     fontFamily: "var(--font-mono)",
-    fontSize: "13.5px",
+    fontSize: "var(--editor-code-font-size, 13.5px)",
     lineHeight: "1.7",
   },
   ".cm-md-code-block-start": {
@@ -2860,15 +3360,18 @@ const margentReadableTheme = EditorView.theme({
     lineHeight: "1",
   },
   ".cm-md-list-marker-widget": {
-    display: "inline-block",
-    minWidth: "1.1em",
-    marginRight: "0.2em",
+    display: "inline-flex",
+    boxSizing: "border-box",
+    width: "1.35em",
+    paddingRight: "0.25em",
     color: "var(--editor-ink-secondary)",
     fontVariantNumeric: "tabular-nums",
     fontWeight: "600",
+    justifyContent: "flex-start",
+    userSelect: "none",
   },
   ".cm-md-list-marker-widget-ordered": {
-    minWidth: "1.6em",
+    width: "2em",
   },
   ".cm-md-task-checkbox-widget": {
     width: "0.92em",
@@ -2910,9 +3413,10 @@ const margentReadableTheme = EditorView.theme({
     maxHeight: "48vh",
     margin: "12px 0",
     overflow: "auto",
-    border: "1px solid var(--rule-cream)",
+    border: "1.5px solid var(--editor-gutter-ink)",
     borderRadius: "5px",
     backgroundColor: "var(--editor-panel-wash)",
+    boxShadow: "0 0 0 1px rgba(13, 48, 45, 0.06)",
     cursor: "text",
   },
   ".cm-md-table-block table": {
@@ -2924,7 +3428,7 @@ const margentReadableTheme = EditorView.theme({
     tableLayout: "fixed",
   },
   ".cm-md-table-block th, .cm-md-table-block td": {
-    border: "1px solid var(--rule-cream)",
+    border: "1px solid var(--editor-table-rule, var(--rule-cream))",
     padding: "8px 10px",
     verticalAlign: "top",
     whiteSpace: "normal",
@@ -2937,6 +3441,41 @@ const margentReadableTheme = EditorView.theme({
   },
   ".cm-md-table-block td": {
     color: "var(--editor-ink-secondary)",
+  },
+  ".cm-md-table-cell-input": {
+    display: "block",
+    boxSizing: "border-box",
+    width: "100%",
+    minWidth: "0",
+    border: "0",
+    borderRadius: "3px",
+    background: "transparent",
+    color: "inherit",
+    font: "inherit",
+    lineHeight: "inherit",
+    padding: "2px 3px",
+  },
+  ".cm-md-table-cell-input:focus": {
+    outline: "1px solid var(--accent-link)",
+    background: "rgba(255, 255, 255, 0.72)",
+  },
+  ".cm-md-table-actions": {
+    display: "flex",
+    justifyContent: "flex-end",
+    padding: "6px 8px 8px",
+  },
+  ".cm-md-table-action-button": {
+    border: "1px solid var(--rule-cream)",
+    borderRadius: "4px",
+    background: "rgba(255, 255, 255, 0.68)",
+    color: "var(--editor-ink-secondary)",
+    font: "600 0.75rem var(--font-ui)",
+    padding: "3px 8px",
+  },
+  ".cm-md-table-action-button:hover, .cm-md-table-action-button:focus-visible": {
+    borderColor: "var(--accent-link)",
+    color: "var(--accent-link)",
+    outline: "none",
   },
   ".cm-md-table-line": {
     backgroundColor: "var(--editor-panel-wash)",
@@ -3124,6 +3663,11 @@ const margentReadableTheme = EditorView.theme({
   ".cm-md-syntax-hidden": {
     display: "none",
   },
+  ".cm-placeholder": {
+    color: "var(--editor-muted-ink)",
+    fontStyle: "italic",
+    pointerEvents: "none",
+  },
   ".cm-focus-dimmed-block": {
     color: "var(--editor-focus-muted-ink)",
   },
@@ -3136,6 +3680,7 @@ const baseExtensions = [
   history(),
   EditorState.allowMultipleSelections.of(true),
   EditorView.lineWrapping,
+  placeholder("Start writing..."),
   search({ top: true }),
   keymap.of([...searchKeymap, indentWithTab, ...markdownKeymap, ...defaultKeymap, ...historyKeymap]),
   markdown({ codeLanguages: markdownCodeLanguages }),
@@ -3202,9 +3747,11 @@ const threadDecorationsField = StateField.define<RangeSet<Decoration>>({
 
 export function useCodeMirror({
   editorMode = "raw",
+  editorZoomPercent = 100,
   initialValue,
   isFocusModeEnabled = false,
   onActiveFootnoteDefinitionChange,
+  onActiveImageChange,
   onActiveLinkChange,
   onCreateLinkRequested,
   onFocusModeTypingActivity,
@@ -3225,8 +3772,11 @@ export function useCodeMirror({
   );
   const [sessionMetrics, setSessionMetrics] =
     useState<CodeMirrorSessionMetrics>(initialSessionMetrics);
+  const [formattingContext, setFormattingContext] =
+    useState<MarkdownFormattingContext>(emptyFormattingContext);
   const viewRef = useRef<EditorView | null>(null);
   const onActiveFootnoteDefinitionChangeRef = useRef(onActiveFootnoteDefinitionChange);
+  const onActiveImageChangeRef = useRef(onActiveImageChange);
   const onActiveLinkChangeRef = useRef(onActiveLinkChange);
   const onCreateLinkRequestedRef = useRef(onCreateLinkRequested);
   const onFocusModeTypingActivityRef = useRef(onFocusModeTypingActivity);
@@ -3239,7 +3789,9 @@ export function useCodeMirror({
   const cleanRevisionRef = useRef(0);
   const sessionSnapshotRef = useRef<CodeMirrorSessionSnapshot>(initialSessionSnapshot);
   const sessionMetricsRef = useRef<CodeMirrorSessionMetrics>(initialSessionMetrics);
+  const formattingContextRef = useRef<MarkdownFormattingContext>(emptyFormattingContext);
   const activeFootnoteDefinitionRef = useRef<ActiveFootnoteDefinition | null>(null);
+  const activeImageRef = useRef<ActiveMarkdownImage | null>(null);
   const activeLinkRef = useRef<ActiveMarkdownLink | null>(null);
   const selectionSnapshotRef = useRef<EditorSelectionSnapshot | null>(null);
   const pendingFocusModeScrollFrameRef = useRef<number | null>(null);
@@ -3250,12 +3802,17 @@ export function useCodeMirror({
   const threadsRef = useRef(threads);
   const selectedThreadIdRef = useRef<string | null>(selectedThreadId);
   const editorModeRef = useRef<EditorMode>(editorMode);
+  const editorZoomPercentRef = useRef(editorZoomPercent);
   const focusModeRef = useRef(isFocusModeEnabled);
   const sessionRef = useRef<CodeMirrorSession | null>(null);
 
   useEffect(() => {
     onActiveFootnoteDefinitionChangeRef.current = onActiveFootnoteDefinitionChange;
   }, [onActiveFootnoteDefinitionChange]);
+
+  useEffect(() => {
+    onActiveImageChangeRef.current = onActiveImageChange;
+  }, [onActiveImageChange]);
 
   useEffect(() => {
     onActiveLinkChangeRef.current = onActiveLinkChange;
@@ -3329,6 +3886,10 @@ export function useCodeMirror({
   }, [editorMode]);
 
   useEffect(() => {
+    editorZoomPercentRef.current = editorZoomPercent;
+  }, [editorZoomPercent]);
+
+  useEffect(() => {
     focusModeRef.current = isFocusModeEnabled;
   }, [isFocusModeEnabled]);
 
@@ -3356,7 +3917,8 @@ export function useCodeMirror({
 
       if (
         current.characterCount === nextMetrics.characterCount &&
-        current.lineCount === nextMetrics.lineCount
+        current.lineCount === nextMetrics.lineCount &&
+        current.wordCount === nextMetrics.wordCount
       ) {
         sessionMetricsRef.current = current;
         return current;
@@ -3365,6 +3927,16 @@ export function useCodeMirror({
       sessionMetricsRef.current = nextMetrics;
       return nextMetrics;
     });
+  }
+
+  function updateFormattingContext(state: EditorState) {
+    const nextContext = getFormattingContext(state);
+    if (areFormattingContextsEqual(formattingContextRef.current, nextContext)) {
+      return;
+    }
+
+    formattingContextRef.current = nextContext;
+    setFormattingContext(nextContext);
   }
 
   function scheduleSessionSnapshotUpdate() {
@@ -3474,6 +4046,28 @@ export function useCodeMirror({
           },
         });
       },
+      formatMarkdown(command) {
+        const view = viewRef.current;
+        if (!view) {
+          return;
+        }
+
+        if (runMarkdownFormattingCommand(view, command)) {
+          updateFormattingContext(view.state);
+          view.focus();
+        }
+      },
+      formatMarkdownTable(command) {
+        const view = viewRef.current;
+        if (!view) {
+          return;
+        }
+
+        if (runMarkdownTableCommand(view, command)) {
+          updateFormattingContext(view.state);
+          view.focus();
+        }
+      },
       focus() {
         viewRef.current?.focus();
       },
@@ -3497,6 +4091,15 @@ export function useCodeMirror({
       getContent() {
         return viewRef.current?.state.doc.toString() ?? initialValue;
       },
+      getFormattingContext() {
+        const view = viewRef.current;
+        if (!view) {
+          return formattingContextRef.current;
+        }
+
+        updateFormattingContext(view.state);
+        return formattingContextRef.current;
+      },
       getRangeRect(from, to) {
         const view = viewRef.current;
         if (!view) {
@@ -3513,6 +4116,32 @@ export function useCodeMirror({
       },
       getSelectionSnapshot() {
         return selectionSnapshotRef.current;
+      },
+      insertMarkdownImages(images) {
+        const view = viewRef.current;
+        const normalizedImages = images.filter((image) => image.relativePath.trim());
+        if (!view || normalizedImages.length === 0) {
+          return;
+        }
+
+        const selection = view.state.selection.main;
+        const insertion = buildMarkdownImageBlocksInsertion(
+          view.state,
+          selection.from,
+          selection.to,
+          normalizedImages,
+        );
+        view.dispatch({
+          changes: {
+            from: selection.from,
+            insert: insertion.insert,
+            to: selection.to,
+          },
+          selection: {
+            anchor: insertion.anchor,
+          },
+        });
+        view.focus();
       },
       isDirty() {
         return revisionRef.current !== cleanRevisionRef.current;
@@ -3671,6 +4300,24 @@ export function useCodeMirror({
           },
         });
       },
+      updateMarkdownImage(image, nextValues) {
+        const view = viewRef.current;
+        if (!view) {
+          return;
+        }
+
+        const replacement = buildMarkdownImageLineReplacement(image, nextValues);
+        view.dispatch({
+          changes: {
+            from: image.from,
+            insert: replacement,
+            to: image.to,
+          },
+          selection: {
+            anchor: image.from,
+          },
+        });
+      },
     };
   }
 
@@ -3690,18 +4337,116 @@ export function useCodeMirror({
             (source) => resolveMarkdownImageSourceRef.current?.(source) ?? source,
           ),
 		          Prec.highest(keymap.of([
-		            {
+	            {
+	              key: "Tab",
+	              preventDefault: true,
+	              run(currentView) {
+	                return moveMarkdownTableCell(currentView, 1);
+	              },
+	            },
+	            {
+	              key: "Shift-Tab",
+	              preventDefault: true,
+	              run(currentView) {
+	                return moveMarkdownTableCell(currentView, -1);
+	              },
+	            },
+	            {
 		              key: "Mod-b",
 		              preventDefault: true,
 		              run(currentView) {
-	                return toggleMarkdownInlineStyle(currentView, "**");
+	                return runMarkdownFormattingCommand(currentView, "bold");
 	              },
 	            },
 	            {
 	              key: "Mod-i",
 	              preventDefault: true,
 	              run(currentView) {
-	                return toggleMarkdownInlineStyle(currentView, "*");
+	                return runMarkdownFormattingCommand(currentView, "italic");
+	              },
+	            },
+	            {
+	              key: "Mod-Shift-x",
+	              preventDefault: true,
+	              run(currentView) {
+	                return runMarkdownFormattingCommand(currentView, "strikethrough");
+	              },
+	            },
+	            {
+	              key: "Mod-e",
+	              preventDefault: true,
+	              run(currentView) {
+	                return runMarkdownFormattingCommand(currentView, "inline-code");
+	              },
+	            },
+	            {
+	              key: "Mod-Alt-0",
+	              preventDefault: true,
+	              run(currentView) {
+	                return runMarkdownFormattingCommand(currentView, "paragraph");
+	              },
+	            },
+	            {
+	              key: "Mod-Alt-1",
+	              preventDefault: true,
+	              run(currentView) {
+	                return runMarkdownFormattingCommand(currentView, "heading-1");
+	              },
+	            },
+	            {
+	              key: "Mod-Alt-2",
+	              preventDefault: true,
+	              run(currentView) {
+	                return runMarkdownFormattingCommand(currentView, "heading-2");
+	              },
+	            },
+	            {
+	              key: "Mod-Alt-3",
+	              preventDefault: true,
+	              run(currentView) {
+	                return runMarkdownFormattingCommand(currentView, "heading-3");
+	              },
+	            },
+	            {
+	              key: "Mod-Alt-4",
+	              preventDefault: true,
+	              run(currentView) {
+	                return runMarkdownFormattingCommand(currentView, "heading-4");
+	              },
+	            },
+	            {
+	              key: "Mod-Shift-8",
+	              preventDefault: true,
+	              run(currentView) {
+	                return runMarkdownFormattingCommand(currentView, "bullet-list");
+	              },
+	            },
+	            {
+	              key: "Mod-Shift-7",
+	              preventDefault: true,
+	              run(currentView) {
+	                return runMarkdownFormattingCommand(currentView, "ordered-list");
+	              },
+	            },
+	            {
+	              key: "Mod-Shift-9",
+	              preventDefault: true,
+	              run(currentView) {
+	                return runMarkdownFormattingCommand(currentView, "task-list");
+	              },
+	            },
+	            {
+	              key: "Mod-Shift-.",
+	              preventDefault: true,
+	              run(currentView) {
+	                return runMarkdownFormattingCommand(currentView, "blockquote");
+	              },
+	            },
+	            {
+	              key: "Mod-Alt-c",
+	              preventDefault: true,
+	              run(currentView) {
+	                return runMarkdownFormattingCommand(currentView, "code-block");
 	              },
 	            },
 	            {
@@ -3782,6 +4527,8 @@ export function useCodeMirror({
             }
 
             if (update.docChanged || update.selectionSet) {
+              updateFormattingContext(update.state);
+
               const selection = readSelection(update.state);
               if (!areSelectionsEqual(selectionSnapshotRef.current, selection)) {
                 selectionSnapshotRef.current = selection;
@@ -3803,6 +4550,12 @@ export function useCodeMirror({
               if (!areActiveMarkdownLinksEqual(activeLinkRef.current, activeLink)) {
                 activeLinkRef.current = activeLink;
                 onActiveLinkChangeRef.current?.(activeLink);
+              }
+
+              const activeImage = readActiveMarkdownImage(update.state);
+              if (!areActiveMarkdownImagesEqual(activeImageRef.current, activeImage)) {
+                activeImageRef.current = activeImage;
+                onActiveImageChangeRef.current?.(activeImage);
               }
             }
           }),
@@ -3906,13 +4659,42 @@ export function useCodeMirror({
               return true;
             },
             paste: (event, currentView) => {
-              const imageFile = getFirstSupportedImageFile(event.clipboardData);
+              const imageFiles = getSupportedImageFiles(event.clipboardData);
               const importImageAsset = onImportImageAssetRef.current;
-              if (imageFile && importImageAsset) {
+              if (imageFiles.length > 0 && importImageAsset) {
                 event.preventDefault();
-                void importImageFileAtSelection(currentView, imageFile, importImageAsset).catch(
+                void importImageFilesAtSelection(currentView, imageFiles, importImageAsset).catch(
                   () => undefined,
                 );
+                return true;
+              }
+
+              const plainText = event.clipboardData?.getData("text/plain") ?? "";
+              const selection = currentView.state.selection.main;
+              const formattingContext = getFormattingContext(currentView.state);
+              if (
+                !selection.empty &&
+                isPlainHttpUrl(plainText) &&
+                !formattingContext.inCodeBlock &&
+                !formattingContext.inFrontmatter
+              ) {
+                const label = currentView.state.doc.sliceString(selection.from, selection.to);
+                const replacement = buildMarkdownLinkReplacement({
+                  label,
+                  title: null,
+                  url: plainText.trim(),
+                });
+                event.preventDefault();
+                currentView.dispatch({
+                  changes: {
+                    from: selection.from,
+                    insert: replacement,
+                    to: selection.to,
+                  },
+                  selection: {
+                    anchor: selection.from + replacement.length,
+                  },
+                });
                 return true;
               }
 
@@ -3922,7 +4704,6 @@ export function useCodeMirror({
               }
 
               event.preventDefault();
-              const plainText = event.clipboardData?.getData("text/plain") ?? "";
               void convertClipboardHtmlToMarkdown(html, plainText)
                 .then((markdownText) => {
                   if (!markdownText.trim()) {
@@ -3939,7 +4720,7 @@ export function useCodeMirror({
               return true;
             },
             dragover: (event) => {
-              if (!getFirstSupportedImageFile(event.dataTransfer) || !onImportImageAssetRef.current) {
+              if (getSupportedImageFiles(event.dataTransfer).length === 0 || !onImportImageAssetRef.current) {
                 return false;
               }
 
@@ -3950,9 +4731,9 @@ export function useCodeMirror({
               return true;
             },
             drop: (event, currentView) => {
-              const imageFile = getFirstSupportedImageFile(event.dataTransfer);
+              const imageFiles = getSupportedImageFiles(event.dataTransfer);
               const importImageAsset = onImportImageAssetRef.current;
-              if (!imageFile || !importImageAsset) {
+              if (imageFiles.length === 0 || !importImageAsset) {
                 return false;
               }
 
@@ -3962,9 +4743,9 @@ export function useCodeMirror({
                   x: event.clientX,
                   y: event.clientY,
                 }) ?? currentView.state.selection.main.head;
-              void importImageFileAtSelection(
+              void importImageFilesAtSelection(
                 currentView,
-                imageFile,
+                imageFiles,
                 importImageAsset,
                 position,
               ).catch(() => undefined);
@@ -3979,6 +4760,7 @@ export function useCodeMirror({
     view.dom.classList.toggle("cm-rendered-mode", editorModeRef.current === "rendered");
     view.dom.classList.toggle("cm-raw-mode", editorModeRef.current !== "rendered");
     view.dom.classList.toggle("cm-focus-mode", focusModeRef.current);
+    applyEditorZoom(view, editorZoomPercentRef.current);
     view.dispatch({
       effects: [
         setEditorPresentationMode.of(editorModeRef.current),
@@ -3988,9 +4770,12 @@ export function useCodeMirror({
     });
     activeLinkRef.current = readActiveMarkdownLink(view.state);
     onActiveLinkChangeRef.current?.(activeLinkRef.current);
+    activeImageRef.current = readActiveMarkdownImage(view.state);
+    onActiveImageChangeRef.current?.(activeImageRef.current);
     activeFootnoteDefinitionRef.current = readActiveFootnoteDefinition(view.state);
     onActiveFootnoteDefinitionChangeRef.current?.(activeFootnoteDefinitionRef.current);
     selectionSnapshotRef.current = readSelection(view.state);
+    updateFormattingContext(view.state);
     updateSessionSnapshot(view.state);
     updateSessionMetrics(view.state);
     const initialThreadPresentation = buildThreadPresentation(threads, view.state);
@@ -4046,6 +4831,15 @@ export function useCodeMirror({
       return;
     }
 
+    applyEditorZoom(view, editorZoomPercent);
+  }, [editorZoomPercent]);
+
+  useEffect(() => {
+    const view = viewRef.current;
+    if (!view) {
+      return;
+    }
+
     view.dom.classList.toggle("cm-focus-mode", isFocusModeEnabled);
     view.dispatch({
       effects: [
@@ -4092,6 +4886,7 @@ export function useCodeMirror({
   }, [selectedThreadId]);
 
   return {
+    formattingContext,
     session: sessionRef.current,
     sessionMetrics,
     sessionSnapshot,
@@ -4541,6 +5336,33 @@ export function readActiveMarkdownLink(state: EditorState) {
     state.selection.main.from,
     state.selection.main.to,
   );
+}
+
+export function readActiveMarkdownImage(state: EditorState): ActiveMarkdownImage | null {
+  const selection = state.selection.main;
+  const line = state.doc.lineAt(selection.from);
+  const endLine = state.doc.lineAt(Math.max(selection.from, selection.to - 1));
+  if (line.number !== endLine.number || selection.to > line.to) {
+    return null;
+  }
+
+  const image = parseStandaloneMarkdownImageLine(line.text);
+  if (!image) {
+    return null;
+  }
+
+  return {
+    alt: image.alt,
+    attrs: image.attrs,
+    from: line.from,
+    indent: image.indent,
+    rawDestination: image.rawDestination,
+    source: image.source,
+    title: image.title,
+    to: line.to,
+    trailing: image.trailing,
+    width: image.width,
+  };
 }
 
 function readActiveMarkdownLinkAtSelection(
@@ -5121,6 +5943,7 @@ function createSessionMetricsFromContent(content: string): CodeMirrorSessionMetr
   return {
     characterCount: content.length,
     lineCount: content.length ? content.split(/\r?\n/).length : 1,
+    wordCount: countWords(content),
   };
 }
 
@@ -5128,7 +5951,13 @@ function createSessionMetricsFromState(state: EditorState): CodeMirrorSessionMet
   return {
     characterCount: state.doc.length,
     lineCount: state.doc.lines,
+    wordCount: countWords(state.doc.toString()),
   };
+}
+
+function countWords(content: string) {
+  const normalized = content.replace(/[\u200b-\u200d\ufeff]/g, " ").trim();
+  return normalized ? normalized.split(/\s+/).length : 0;
 }
 
 export function mapThreadPresentation(
@@ -5239,5 +6068,29 @@ function areActiveMarkdownLinksEqual(
     current.urlTo === next.urlTo &&
     current.titleFrom === next.titleFrom &&
     current.titleTo === next.titleTo
+  );
+}
+
+function areActiveMarkdownImagesEqual(
+  current: ActiveMarkdownImage | null,
+  next: ActiveMarkdownImage | null,
+) {
+  if (current === next) {
+    return true;
+  }
+
+  if (!current || !next) {
+    return false;
+  }
+
+  return (
+    current.from === next.from &&
+    current.to === next.to &&
+    current.alt === next.alt &&
+    current.rawDestination === next.rawDestination &&
+    current.source === next.source &&
+    current.title === next.title &&
+    current.width === next.width &&
+    current.attrs.map((attr) => attr.raw).join(" ") === next.attrs.map((attr) => attr.raw).join(" ")
   );
 }

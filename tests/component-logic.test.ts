@@ -8,6 +8,9 @@ import {
   COMMENT_DOCK_DEFAULT_WIDTH,
   COMMENT_DOCK_MAX_WIDTH,
   COMMENT_DOCK_MIN_WIDTH,
+  EDITOR_ZOOM_DEFAULT_PERCENT,
+  EDITOR_ZOOM_MAX_PERCENT,
+  EDITOR_ZOOM_MIN_PERCENT,
   useUiStore,
 } from "../src/stores/uiStore";
 import { useWorkspaceStore } from "../src/stores/workspaceStore";
@@ -686,17 +689,42 @@ describe("UI layout store state transitions", () => {
     expect(useUiStore.getState().commentDockWidth).toBe(COMMENT_DOCK_MIN_WIDTH);
   });
 
+  it("stores, clamps, steps, and resets the editor zoom", () => {
+    expect(useUiStore.getState().editorZoomPercent).toBe(EDITOR_ZOOM_DEFAULT_PERCENT);
+
+    useUiStore.getState().setEditorZoomPercent(137);
+    expect(useUiStore.getState().editorZoomPercent).toBe(140);
+    expect(window.localStorage.getItem("margent:ui")).toContain('"editorZoomPercent":140');
+
+    useUiStore.getState().setEditorZoomPercent(EDITOR_ZOOM_MAX_PERCENT + 100);
+    expect(useUiStore.getState().editorZoomPercent).toBe(EDITOR_ZOOM_MAX_PERCENT);
+
+    useUiStore.getState().setEditorZoomPercent(EDITOR_ZOOM_MIN_PERCENT - 100);
+    expect(useUiStore.getState().editorZoomPercent).toBe(EDITOR_ZOOM_MIN_PERCENT);
+
+    useUiStore.getState().zoomEditorIn();
+    expect(useUiStore.getState().editorZoomPercent).toBe(EDITOR_ZOOM_MIN_PERCENT + 10);
+
+    useUiStore.getState().zoomEditorOut();
+    expect(useUiStore.getState().editorZoomPercent).toBe(EDITOR_ZOOM_MIN_PERCENT);
+
+    useUiStore.getState().resetEditorZoom();
+    expect(useUiStore.getState().editorZoomPercent).toBe(EDITOR_ZOOM_DEFAULT_PERCENT);
+  });
+
   it("reset clears layout state and persisted storage", () => {
     useUiStore.getState().setEditorMode("rendered");
     useUiStore.getState().setCommentDockWidth(620);
     useUiStore.getState().setDocumentOutlineVisible(true);
     useUiStore.getState().setFocusModeEnabled(true);
+    useUiStore.getState().setEditorZoomPercent(150);
     useUiStore.getState().setWorkspacePaneCollapsed(true);
 
     useUiStore.getState().reset();
 
     expect(useUiStore.getState().commentDockWidth).toBe(COMMENT_DOCK_DEFAULT_WIDTH);
     expect(useUiStore.getState().editorMode).toBe("rendered");
+    expect(useUiStore.getState().editorZoomPercent).toBe(EDITOR_ZOOM_DEFAULT_PERCENT);
     expect(useUiStore.getState().isDocumentOutlineVisible).toBe(false);
     expect(useUiStore.getState().isFocusModeEnabled).toBe(false);
     expect(useUiStore.getState().isWorkspacePaneCollapsed).toBe(false);

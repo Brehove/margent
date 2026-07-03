@@ -166,6 +166,17 @@ pub async fn import_asset(
 }
 
 #[tauri::command]
+pub async fn import_asset_from_path(
+    workspace_root: String,
+    source_path: String,
+) -> Result<crate::models::workspace::AssetImportResult, String> {
+    super::run_blocking("import asset from path", move || {
+        workspace_service::import_asset_from_path(&workspace_root, &source_path)
+    })
+    .await
+}
+
+#[tauri::command]
 pub fn take_pending_open_requests(
     queue: State<'_, PendingOpenRequestQueue>,
 ) -> Result<Vec<WorkspaceOpenRequest>, String> {

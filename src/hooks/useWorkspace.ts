@@ -930,6 +930,28 @@ export async function importWorkspaceAsset(suggestedName: string, bytes: number[
   }
 }
 
+export async function importWorkspaceAssetFromPath(sourcePath: string) {
+  const store = useWorkspaceStore.getState();
+  const workspace = store.workspace;
+
+  if (!workspace) {
+    throw new Error("Open a Margent workspace before importing image assets.");
+  }
+
+  store.setErrorMessage(null);
+
+  try {
+    return await invokeBackend<AssetImportResult>("import_asset_from_path", {
+      sourcePath,
+      workspaceRoot: workspace.rootPath,
+    });
+  } catch (error) {
+    const message = getErrorMessage(error, "Unable to import the image asset.");
+    store.setErrorMessage(message);
+    throw new Error(message);
+  }
+}
+
 export async function saveCurrentDocument(content: string) {
   const latest = useWorkspaceStore.getState();
 

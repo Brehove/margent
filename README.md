@@ -177,6 +177,25 @@ margent codex revise --id thread_123 --pass fact-check
 
 Replies and proposals appear live in the desktop app through the `.mdreview/` watchers.
 
+## Editing Shortcuts
+
+Margent's editor keeps Markdown as the source of truth while the toolbar, Format menu, and shortcuts apply source-text edits:
+
+| Shortcut | Action |
+| --- | --- |
+| `Cmd/Ctrl+B` | Bold |
+| `Cmd/Ctrl+I` | Italic |
+| `Cmd/Ctrl+Shift+X` | Strikethrough |
+| `Cmd/Ctrl+E` | Inline code |
+| `Cmd/Ctrl+Alt+0` | Paragraph |
+| `Cmd/Ctrl+Alt+1` ... `4` | Heading 1 ... 4 |
+| `Cmd/Ctrl+Shift+8` | Bullet list |
+| `Cmd/Ctrl+Shift+7` | Ordered list |
+| `Cmd/Ctrl+Shift+9` | Task list |
+| `Cmd/Ctrl+Shift+.` | Blockquote |
+| `Cmd/Ctrl+Alt+C` | Code block |
+| `Tab` / `Shift+Tab` inside a table | Move between table cells; `Tab` at the last cell appends a row |
+
 Mode 2: Margent UI inside the Codex in-app browser.
 
 ```sh

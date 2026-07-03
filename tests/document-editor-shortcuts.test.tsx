@@ -2,7 +2,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { DocumentEditor } from "../src/components/editor/DocumentEditor";
 import { APP_MENU_COMMANDS, APP_MENU_DOM_EVENT } from "../src/lib/appMenuCommands";
-import { useUiStore } from "../src/stores/uiStore";
+import {
+  EDITOR_ZOOM_DEFAULT_PERCENT,
+  EDITOR_ZOOM_MAX_PERCENT,
+  useUiStore,
+} from "../src/stores/uiStore";
 import type { CodeMirrorSession } from "../src/components/editor/useCodeMirror";
 import type { ProposalRecord } from "../src/types/proposal";
 import type { AnchorRecord, MessageRecord, ThreadRecord } from "../src/types/thread";
@@ -44,14 +48,29 @@ function makeDocumentPayload(overrides: Partial<DocumentPayload> = {}): Document
 function makeSession(overrides: Partial<CodeMirrorSession> = {}): CodeMirrorSession {
   return {
     createMarkdownLink: vi.fn(),
+    formatMarkdown: vi.fn(),
+    formatMarkdownTable: vi.fn(),
     focus: vi.fn(),
     focusFootnoteDefinition: vi.fn(),
     getCharacterCount: vi.fn(() => 7),
     getContent: vi.fn(() => "# Saved from shortcut\n"),
+    getFormattingContext: vi.fn(() => ({
+      blockquote: false,
+      bold: false,
+      headingLevel: null,
+      inCodeBlock: false,
+      inFrontmatter: false,
+      inTable: false,
+      inlineCode: false,
+      italic: false,
+      listType: null,
+      strikethrough: false,
+    })),
     getRangeRect: vi.fn(() => null),
     getLineCount: vi.fn(() => 2),
     getRevision: vi.fn(() => 1),
     getSelectionSnapshot: vi.fn(() => null),
+    insertMarkdownImages: vi.fn(),
     isDirty: vi.fn(() => true),
     markClean: vi.fn(),
     openSearch: vi.fn(),
@@ -59,6 +78,7 @@ function makeSession(overrides: Partial<CodeMirrorSession> = {}): CodeMirrorSess
     replaceContent: vi.fn(),
     scrollToLine: vi.fn(),
     updateFootnoteDefinition: vi.fn(),
+    updateMarkdownImage: vi.fn(),
     updateMarkdownLink: vi.fn(),
     ...overrides,
   };
@@ -147,6 +167,7 @@ describe("DocumentEditor keyboard shortcuts", () => {
     mockUseCodeMirror.mockReset();
     useUiStore.setState({
       editorMode: "rendered",
+      editorZoomPercent: EDITOR_ZOOM_DEFAULT_PERCENT,
       isFocusModeEnabled: false,
       isWorkspacePaneCollapsed: false,
       preferredAgentProvider: "codex",
@@ -568,6 +589,100 @@ describe("DocumentEditor keyboard shortcuts", () => {
         isFocusModeEnabled: true,
       }),
     );
+  });
+
+  it("zooms the editor from the header controls and passes the value to CodeMirror", () => {
+    mockUseCodeMirror.mockReturnValue({
+      session: makeSession({ isDirty: vi.fn(() => false) }),
+      sessionMetrics: {
+        characterCount: 7,
+        lineCount: 2,
+      },
+      sessionSnapshot: {
+        isDirty: false,
+        revision: 0,
+      },
+      setHostElement: vi.fn(),
+    });
+
+    render(
+      <DocumentEditor
+        addReply={vi.fn(async () => {})}
+        createThreadFromSelection={vi.fn(async () => {})}
+        deleteThread={vi.fn(async () => {})}
+        document={makeDocumentPayload()}
+        isSaving={false}
+        isThreadSaving={false}
+        loadThread={vi.fn(async () => null)}
+        onDirtyChange={vi.fn()}
+        onSave={vi.fn()}
+        onThreadSelect={vi.fn()}
+        reopenThread={vi.fn(async () => {})}
+        resolveThread={vi.fn(async () => {})}
+        threads={[]}
+      />,
+    );
+
+    expect(screen.getByRole("button", { name: "Reset editor zoom" })).toHaveTextContent("100%");
+    expect(screen.getByRole("button", { name: "Reset editor zoom" })).toBeDisabled();
+    expect(mockUseCodeMirror).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        editorZoomPercent: EDITOR_ZOOM_DEFAULT_PERCENT,
+      }),
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Zoom in" }));
+
+    expect(useUiStore.getState().editorZoomPercent).toBe(110);
+    expect(screen.getByRole("button", { name: "Reset editor zoom" })).toHaveTextContent("110%");
+    expect(screen.getByRole("button", { name: "Reset editor zoom" })).not.toBeDisabled();
+    expect(mockUseCodeMirror).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        editorZoomPercent: 110,
+      }),
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Reset editor zoom" }));
+
+    expect(useUiStore.getState().editorZoomPercent).toBe(EDITOR_ZOOM_DEFAULT_PERCENT);
+    expect(screen.getByRole("button", { name: "Reset editor zoom" })).toHaveTextContent("100%");
+  });
+
+  it("disables zoom in at the maximum zoom", () => {
+    useUiStore.getState().setEditorZoomPercent(EDITOR_ZOOM_MAX_PERCENT);
+    mockUseCodeMirror.mockReturnValue({
+      session: makeSession({ isDirty: vi.fn(() => false) }),
+      sessionMetrics: {
+        characterCount: 7,
+        lineCount: 2,
+      },
+      sessionSnapshot: {
+        isDirty: false,
+        revision: 0,
+      },
+      setHostElement: vi.fn(),
+    });
+
+    render(
+      <DocumentEditor
+        addReply={vi.fn(async () => {})}
+        createThreadFromSelection={vi.fn(async () => {})}
+        deleteThread={vi.fn(async () => {})}
+        document={makeDocumentPayload()}
+        isSaving={false}
+        isThreadSaving={false}
+        loadThread={vi.fn(async () => null)}
+        onDirtyChange={vi.fn()}
+        onSave={vi.fn()}
+        onThreadSelect={vi.fn()}
+        reopenThread={vi.fn(async () => {})}
+        resolveThread={vi.fn(async () => {})}
+        threads={[]}
+      />,
+    );
+
+    expect(screen.getByRole("button", { name: "Zoom in" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Reset editor zoom" })).toHaveTextContent("200%");
   });
 
   it("scrolls to a project search navigation request", async () => {
