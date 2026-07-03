@@ -220,59 +220,45 @@ fn build_app_menu<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> tauri::Result
     let format_italic = MenuItemBuilder::with_id(MENU_FORMAT_ITALIC, "Italic")
         .accelerator("CmdOrCtrl+I")
         .build(app)?;
-    let format_strikethrough = MenuItemBuilder::with_id(
-        MENU_FORMAT_STRIKETHROUGH,
-        "Strikethrough",
-    )
-    .accelerator("CmdOrCtrl+Shift+X")
-    .build(app)?;
+    let format_strikethrough = MenuItemBuilder::with_id(MENU_FORMAT_STRIKETHROUGH, "Strikethrough")
+        .accelerator("CmdOrCtrl+Shift+X")
+        .build(app)?;
     let format_inline_code = MenuItemBuilder::with_id(MENU_FORMAT_INLINE_CODE, "Inline Code")
         .accelerator("CmdOrCtrl+E")
         .build(app)?;
-    let format_heading_1 =
-        MenuItemBuilder::with_id(MENU_FORMAT_HEADING_1, "Heading 1")
-            .accelerator("CmdOrCtrl+Alt+1")
-            .build(app)?;
-    let format_heading_2 =
-        MenuItemBuilder::with_id(MENU_FORMAT_HEADING_2, "Heading 2")
-            .accelerator("CmdOrCtrl+Alt+2")
-            .build(app)?;
-    let format_heading_3 =
-        MenuItemBuilder::with_id(MENU_FORMAT_HEADING_3, "Heading 3")
-            .accelerator("CmdOrCtrl+Alt+3")
-            .build(app)?;
-    let format_heading_4 =
-        MenuItemBuilder::with_id(MENU_FORMAT_HEADING_4, "Heading 4")
-            .accelerator("CmdOrCtrl+Alt+4")
-            .build(app)?;
-    let format_paragraph =
-        MenuItemBuilder::with_id(MENU_FORMAT_PARAGRAPH, "Paragraph")
-            .accelerator("CmdOrCtrl+Alt+0")
-            .build(app)?;
-    let format_bullet_list =
-        MenuItemBuilder::with_id(MENU_FORMAT_BULLET_LIST, "Bullet List")
-            .accelerator("CmdOrCtrl+Shift+8")
-            .build(app)?;
-    let format_ordered_list =
-        MenuItemBuilder::with_id(MENU_FORMAT_ORDERED_LIST, "Ordered List")
-            .accelerator("CmdOrCtrl+Shift+7")
-            .build(app)?;
-    let format_task_list =
-        MenuItemBuilder::with_id(MENU_FORMAT_TASK_LIST, "Task List")
-            .accelerator("CmdOrCtrl+Shift+9")
-            .build(app)?;
-    let format_blockquote =
-        MenuItemBuilder::with_id(MENU_FORMAT_BLOCKQUOTE, "Blockquote")
-            .accelerator("CmdOrCtrl+Shift+.")
-            .build(app)?;
-    let format_code_block =
-        MenuItemBuilder::with_id(MENU_FORMAT_CODE_BLOCK, "Code Block")
-            .accelerator("CmdOrCtrl+Alt+C")
-            .build(app)?;
+    let format_heading_1 = MenuItemBuilder::with_id(MENU_FORMAT_HEADING_1, "Heading 1")
+        .accelerator("CmdOrCtrl+Alt+1")
+        .build(app)?;
+    let format_heading_2 = MenuItemBuilder::with_id(MENU_FORMAT_HEADING_2, "Heading 2")
+        .accelerator("CmdOrCtrl+Alt+2")
+        .build(app)?;
+    let format_heading_3 = MenuItemBuilder::with_id(MENU_FORMAT_HEADING_3, "Heading 3")
+        .accelerator("CmdOrCtrl+Alt+3")
+        .build(app)?;
+    let format_heading_4 = MenuItemBuilder::with_id(MENU_FORMAT_HEADING_4, "Heading 4")
+        .accelerator("CmdOrCtrl+Alt+4")
+        .build(app)?;
+    let format_paragraph = MenuItemBuilder::with_id(MENU_FORMAT_PARAGRAPH, "Paragraph")
+        .accelerator("CmdOrCtrl+Alt+0")
+        .build(app)?;
+    let format_bullet_list = MenuItemBuilder::with_id(MENU_FORMAT_BULLET_LIST, "Bullet List")
+        .accelerator("CmdOrCtrl+Shift+8")
+        .build(app)?;
+    let format_ordered_list = MenuItemBuilder::with_id(MENU_FORMAT_ORDERED_LIST, "Ordered List")
+        .accelerator("CmdOrCtrl+Shift+7")
+        .build(app)?;
+    let format_task_list = MenuItemBuilder::with_id(MENU_FORMAT_TASK_LIST, "Task List")
+        .accelerator("CmdOrCtrl+Shift+9")
+        .build(app)?;
+    let format_blockquote = MenuItemBuilder::with_id(MENU_FORMAT_BLOCKQUOTE, "Blockquote")
+        .accelerator("CmdOrCtrl+Shift+.")
+        .build(app)?;
+    let format_code_block = MenuItemBuilder::with_id(MENU_FORMAT_CODE_BLOCK, "Code Block")
+        .accelerator("CmdOrCtrl+Alt+C")
+        .build(app)?;
     let format_horizontal_rule =
         MenuItemBuilder::with_id(MENU_FORMAT_HORIZONTAL_RULE, "Horizontal Rule").build(app)?;
-    let insert_footnote =
-        MenuItemBuilder::with_id(MENU_INSERT_FOOTNOTE, "Footnote").build(app)?;
+    let insert_footnote = MenuItemBuilder::with_id(MENU_INSERT_FOOTNOTE, "Footnote").build(app)?;
     let insert_table = MenuItemBuilder::with_id(MENU_INSERT_TABLE, "Table").build(app)?;
     let insert_image = MenuItemBuilder::with_id(MENU_INSERT_IMAGE, "Image").build(app)?;
     let project_search = MenuItemBuilder::with_id(MENU_PROJECT_SEARCH, "Find in Workspace")
@@ -297,10 +283,9 @@ fn build_app_menu<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> tauri::Result
     let zoom_out = MenuItemBuilder::with_id(MENU_ZOOM_OUT, "Zoom Out")
         .accelerator("CmdOrCtrl+-")
         .build(app)?;
-    let zoom_actual_size =
-        MenuItemBuilder::with_id(MENU_ZOOM_ACTUAL_SIZE, "Actual Size")
-            .accelerator("CmdOrCtrl+0")
-            .build(app)?;
+    let zoom_actual_size = MenuItemBuilder::with_id(MENU_ZOOM_ACTUAL_SIZE, "Actual Size")
+        .accelerator("CmdOrCtrl+0")
+        .build(app)?;
     let providers = MenuItemBuilder::with_id(MENU_PROVIDERS, "Providers").build(app)?;
     let review_brief = MenuItemBuilder::with_id(MENU_REVIEW_BRIEF, "Review Brief").build(app)?;
     let check_for_updates =

@@ -720,12 +720,9 @@ pub fn import_asset_from_path(
     source_path: &str,
 ) -> Result<AssetImportResult, String> {
     let source = Path::new(source_path);
-    let canonical_source = source.canonicalize().map_err(|error| {
-        format!(
-            "Unable to resolve image file {}: {error}",
-            source.display()
-        )
-    })?;
+    let canonical_source = source
+        .canonicalize()
+        .map_err(|error| format!("Unable to resolve image file {}: {error}", source.display()))?;
     let metadata = fs::metadata(&canonical_source).map_err(|error| {
         format!(
             "Unable to inspect image file {}: {error}",
