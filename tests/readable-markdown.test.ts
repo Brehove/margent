@@ -676,6 +676,32 @@ describe("buildRenderedMarkdownDecorations", () => {
     expect(hiddenRanges).toContain("https://x.test");
   });
 
+  it("keeps active heading marks hidden so typed heading shortcuts render immediately", () => {
+    const doc = "## Heading";
+    const state = EditorState.create({
+      doc,
+      extensions: [markdown()],
+      selection: {
+        anchor: doc.length,
+      },
+    });
+
+    const decorations = buildRenderedMarkdownDecorations(
+      state,
+      [{ from: 0, to: state.doc.length }],
+      "rendered",
+    );
+
+    const hiddenRanges: string[] = [];
+    decorations.between(0, state.doc.length, (from, to, decoration) => {
+      if (decoration.spec.class === "cm-md-syntax-hidden") {
+        hiddenRanges.push(state.doc.sliceString(from, to));
+      }
+    });
+
+    expect(hiddenRanges).toContain("##");
+  });
+
   it("keeps active paragraph inline syntax rendered in rendered mode", () => {
     const doc = [
       "Paragraph with [label](https://x.test)",
@@ -773,6 +799,73 @@ describe("buildRenderedMarkdownDecorations", () => {
     });
 
     expect(widgetTexts).toContain("•");
+  });
+
+  it("renders visible bullet markers for active list items", () => {
+    const doc = "- bullet item";
+    const state = EditorState.create({
+      doc,
+      extensions: [markdown()],
+      selection: {
+        anchor: doc.indexOf("bullet"),
+      },
+    });
+
+    const decorations = buildRenderedMarkdownDecorations(
+      state,
+      [{ from: 0, to: state.doc.length }],
+      "rendered",
+    );
+
+    const hiddenRanges: string[] = [];
+    const widgetTexts: string[] = [];
+    decorations.between(0, state.doc.length, (from, to, decoration) => {
+      if (decoration.spec.class === "cm-md-syntax-hidden") {
+        hiddenRanges.push(state.doc.sliceString(from, to));
+      }
+      const widget = decoration.spec.widget;
+      if (widget) {
+        widgetTexts.push(widget.toDOM().textContent ?? "");
+      }
+    });
+
+    expect(hiddenRanges).toContain("-");
+    expect(widgetTexts).toContain("•");
+  });
+
+  it("routes clicks on rendered ordered-list markers to the visible list text", () => {
+    const doc = "7. Ask what shared databases need";
+    const host = document.createElement("div");
+    document.body.append(host);
+    const view = new EditorView({
+      parent: host,
+      state: EditorState.create({
+        doc,
+        extensions: [markdown()],
+      }),
+    });
+    const decorations = buildRenderedMarkdownDecorations(
+      view.state,
+      [{ from: 0, to: view.state.doc.length }],
+      "rendered",
+    );
+    let markerWidget: { toDOM(view: EditorView): HTMLElement } | null = null;
+    decorations.between(0, view.state.doc.length, (_from, _to, decoration) => {
+      if (getWidgetName(decoration.spec.widget) === "MarkdownMarkerWidget") {
+        markerWidget = decoration.spec.widget as { toDOM(view: EditorView): HTMLElement };
+      }
+    });
+
+    markerWidget?.toDOM(view).dispatchEvent(
+      new MouseEvent("mousedown", {
+        bubbles: true,
+        button: 0,
+      }),
+    );
+
+    expect(view.state.selection.main.anchor).toBe(doc.indexOf("Ask"));
+    view.destroy();
+    host.remove();
   });
 
   it("keeps link syntax hidden while a rendered-mode link is active", () => {
@@ -905,8 +998,11 @@ describe("buildRenderedMarkdownDecorations", () => {
     ).toHaveLength(1);
   });
 
-  it("keeps active markdown tables in rendered preview form", () => {
-    const doc = ["| name | link |", "| --- | --- |", "| item | [label](https://x.test) |"].join("\n");
+  it("renders active markdown tables as editable table widgets", () => {
+    const tableDoc = ["| name | link |", "| --- | --- |", "| item | [label](https://x.test) |"].join(
+      "\n",
+    );
+    const doc = `${tableDoc}\n\nTrailing`;
     const state = EditorState.create({
       doc,
       extensions: [markdown()],
@@ -919,8 +1015,8 @@ describe("buildRenderedMarkdownDecorations", () => {
       "rendered",
     );
 
-    const hiddenRanges: string[] = [];
     const widgets: string[] = [];
+    const hiddenRanges: string[] = [];
     decorations.between(0, state.doc.length, (from, to, decoration) => {
       if (decoration.spec.class === "cm-md-syntax-hidden") {
         hiddenRanges.push(state.doc.sliceString(from, to));
@@ -930,13 +1026,12 @@ describe("buildRenderedMarkdownDecorations", () => {
       }
     });
 
-    expect(hiddenRanges).toContain(doc);
-    expect(hiddenRanges.join("")).toContain("https://x.test");
     expect(widgets).toContain("MarkdownTablePreviewWidget");
-    expect(widgets).not.toContain("MarkdownTableBlockWidget");
+    expect(hiddenRanges).toContain(tableDoc);
+    expect(hiddenRanges.join("\n")).not.toContain("Trailing");
   });
 
-  it("renders inactive markdown tables as bounded preview widgets", () => {
+  it("renders inactive markdown tables as editable table widgets", () => {
     const doc = [
       "| name | link |",
       "| --- | --- |",
@@ -964,7 +1059,43 @@ describe("buildRenderedMarkdownDecorations", () => {
     });
 
     expect(widgets).toContain("MarkdownTablePreviewWidget");
-    expect(widgets).not.toContain("MarkdownTableBlockWidget");
+  });
+
+  it("edits rendered table widget cells back into markdown source", () => {
+    const doc = ["| name | link |", "| --- | --- |", "| item | old |"].join("\n");
+    const host = document.createElement("div");
+    document.body.append(host);
+    const view = new EditorView({
+      parent: host,
+      state: EditorState.create({
+        doc,
+        extensions: [markdown()],
+      }),
+    });
+    const decorations = buildRenderedMarkdownDecorations(
+      view.state,
+      [{ from: 0, to: view.state.doc.length }],
+      "rendered",
+    );
+    let tableWidget: { toDOM(view: EditorView): HTMLElement } | null = null;
+    decorations.between(0, view.state.doc.length, (_from, _to, decoration) => {
+      if (getWidgetName(decoration.spec.widget) === "MarkdownTablePreviewWidget") {
+        tableWidget = decoration.spec.widget as { toDOM(view: EditorView): HTMLElement };
+      }
+    });
+
+    const tableDom = tableWidget?.toDOM(view);
+    const input = tableDom?.querySelectorAll<HTMLInputElement>("input")[3];
+    expect(input?.value).toBe("old");
+
+    input!.value = "new | value";
+    input!.dispatchEvent(new Event("change"));
+
+    expect(view.state.doc.toString()).toBe(
+      ["| name | link |", "| --- | --- |", "| item | new \\| value |"].join("\n"),
+    );
+    view.destroy();
+    host.remove();
   });
 
   it("keeps a source-styled fallback when the viewport starts mid-table", () => {
@@ -1003,7 +1134,7 @@ describe("buildRenderedMarkdownDecorations", () => {
     expect(widgets).not.toContain("MarkdownTableBlockWidget");
   });
 
-  it("renders long-draft table passages as bounded preview widgets", () => {
+  it("renders long-draft table passages as editable table widgets", () => {
     const doc = [
       "Use this table as a map.",
       "",
@@ -1036,7 +1167,6 @@ describe("buildRenderedMarkdownDecorations", () => {
     });
 
     expect(widgets).toContain("MarkdownTablePreviewWidget");
-    expect(widgets).not.toContain("MarkdownTableBlockWidget");
   });
 
   it("does not treat plain prose with a single pipe as a markdown table header", () => {

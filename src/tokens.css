@@ -116,6 +116,8 @@
   --editor-ink: var(--ink-primary);
   --editor-ink-secondary: var(--ink-secondary);
   --editor-ink-tertiary: var(--ink-tertiary);
+  --editor-body-font-size: 16px;
+  --editor-readable-font-size: 17px;
   --editor-syntax-faded: rgba(131, 114, 90, 0.55);
   --editor-caret: var(--ink-primary);
   --editor-selection: rgba(23, 60, 59, 0.2);

@@ -29,6 +29,7 @@ import {
   keepMargentVersionForSaveConflict,
   loadDocument,
   importWorkspaceAsset,
+  importWorkspaceAssetFromPath,
   openFileWorkspace,
   openFolderWorkspace,
   openWorkspacePath,
@@ -56,6 +57,27 @@ type AppView = "editor" | "project-search" | "providers" | "review-brief";
 type ProviderThreadActionKind = "feedback" | "revise";
 type ProviderDocumentActionKind = "feedback" | "revise";
 const PROVIDER_STREAM_EVENT = "margent://provider-stream";
+const EDITOR_PALETTE_COMMANDS: Record<string, AppMenuCommand> = {
+  "format-blockquote": APP_MENU_COMMANDS.formatBlockquote,
+  "format-bold": APP_MENU_COMMANDS.formatBold,
+  "format-bullet-list": APP_MENU_COMMANDS.formatBulletList,
+  "format-code-block": APP_MENU_COMMANDS.formatCodeBlock,
+  "format-heading-1": APP_MENU_COMMANDS.formatHeading1,
+  "format-heading-2": APP_MENU_COMMANDS.formatHeading2,
+  "format-heading-3": APP_MENU_COMMANDS.formatHeading3,
+  "format-heading-4": APP_MENU_COMMANDS.formatHeading4,
+  "format-horizontal-rule": APP_MENU_COMMANDS.formatHorizontalRule,
+  "format-inline-code": APP_MENU_COMMANDS.formatInlineCode,
+  "format-italic": APP_MENU_COMMANDS.formatItalic,
+  "format-ordered-list": APP_MENU_COMMANDS.formatOrderedList,
+  "format-paragraph": APP_MENU_COMMANDS.formatParagraph,
+  "format-strikethrough": APP_MENU_COMMANDS.formatStrikethrough,
+  "format-task-list": APP_MENU_COMMANDS.formatTaskList,
+  "insert-footnote": APP_MENU_COMMANDS.insertFootnote,
+  "insert-image": APP_MENU_COMMANDS.insertImage,
+  "insert-table": APP_MENU_COMMANDS.insertTable,
+};
+const EDITOR_MENU_COMMAND_VALUES = new Set<AppMenuCommand>(Object.values(EDITOR_PALETTE_COMMANDS));
 
 function safeUnlisten(unlisten: () => void | Promise<void>) {
   try {
@@ -113,6 +135,7 @@ function App() {
   const isFocusModeEnabled = useUiStore((state) => state.isFocusModeEnabled);
   const isWorkspacePaneCollapsed = useUiStore((state) => state.isWorkspacePaneCollapsed);
   const preferredReviewPassName = useUiStore((state) => state.preferredReviewPassName);
+  const editorZoomPercent = useUiStore((state) => state.editorZoomPercent);
   const saveConflict = useWorkspaceStore((state) => state.saveConflict);
   const setActiveDocument = useWorkspaceStore((state) => state.setActiveDocument);
   const setPreferredReviewPassName = useUiStore((state) => state.setPreferredReviewPassName);
@@ -313,15 +336,37 @@ function App() {
 
   useEffect(() => {
     const handleKeydown = (event: KeyboardEvent) => {
+      const isCommandModifier = event.metaKey || event.ctrlKey;
+      const normalizedKey = event.key.toLowerCase();
+      if (isCommandModifier && !event.altKey) {
+        if (event.key === "+" || event.key === "=") {
+          event.preventDefault();
+          useUiStore.getState().zoomEditorIn();
+          return;
+        }
+
+        if (event.key === "-" || event.key === "_") {
+          event.preventDefault();
+          useUiStore.getState().zoomEditorOut();
+          return;
+        }
+
+        if (normalizedKey === "0") {
+          event.preventDefault();
+          useUiStore.getState().resetEditorZoom();
+          return;
+        }
+      }
+
       const isPaletteShortcut =
-        (event.metaKey || event.ctrlKey) &&
+        isCommandModifier &&
         !event.altKey &&
-        event.key.toLowerCase() === "p";
+        normalizedKey === "p";
       const isProjectSearchShortcut =
-        (event.metaKey || event.ctrlKey) &&
+        isCommandModifier &&
         event.shiftKey &&
         !event.altKey &&
-        event.key.toLowerCase() === "f";
+        normalizedKey === "f";
       if (!isPaletteShortcut && !isProjectSearchShortcut) {
         return;
       }
@@ -492,6 +537,111 @@ function App() {
         keywords: ["pdf", "print"],
       },
       {
+        detail: activeDocument?.relativePath ?? "Open a document first",
+        disabled: !activeDocument,
+        id: "format-bold",
+        label: "Format Bold",
+        keywords: ["markdown", "style"],
+      },
+      {
+        detail: activeDocument?.relativePath ?? "Open a document first",
+        disabled: !activeDocument,
+        id: "format-italic",
+        label: "Format Italic",
+        keywords: ["markdown", "style"],
+      },
+      {
+        detail: activeDocument?.relativePath ?? "Open a document first",
+        disabled: !activeDocument,
+        id: "format-strikethrough",
+        label: "Format Strikethrough",
+        keywords: ["markdown", "style"],
+      },
+      {
+        detail: activeDocument?.relativePath ?? "Open a document first",
+        disabled: !activeDocument,
+        id: "format-inline-code",
+        label: "Format Inline Code",
+        keywords: ["markdown", "code"],
+      },
+      ...[1, 2, 3, 4].map((level) => ({
+        detail: activeDocument?.relativePath ?? "Open a document first",
+        disabled: !activeDocument,
+        id: `format-heading-${level}`,
+        label: `Format Heading ${level}`,
+        keywords: ["markdown", "heading"],
+      })),
+      {
+        detail: activeDocument?.relativePath ?? "Open a document first",
+        disabled: !activeDocument,
+        id: "format-paragraph",
+        label: "Format Paragraph",
+        keywords: ["markdown", "body"],
+      },
+      {
+        detail: activeDocument?.relativePath ?? "Open a document first",
+        disabled: !activeDocument,
+        id: "format-bullet-list",
+        label: "Format Bullet List",
+        keywords: ["markdown", "list"],
+      },
+      {
+        detail: activeDocument?.relativePath ?? "Open a document first",
+        disabled: !activeDocument,
+        id: "format-ordered-list",
+        label: "Format Ordered List",
+        keywords: ["markdown", "list"],
+      },
+      {
+        detail: activeDocument?.relativePath ?? "Open a document first",
+        disabled: !activeDocument,
+        id: "format-task-list",
+        label: "Format Task List",
+        keywords: ["markdown", "checklist"],
+      },
+      {
+        detail: activeDocument?.relativePath ?? "Open a document first",
+        disabled: !activeDocument,
+        id: "format-blockquote",
+        label: "Format Blockquote",
+        keywords: ["markdown", "quote"],
+      },
+      {
+        detail: activeDocument?.relativePath ?? "Open a document first",
+        disabled: !activeDocument,
+        id: "format-code-block",
+        label: "Insert Code Block",
+        keywords: ["markdown", "code"],
+      },
+      {
+        detail: activeDocument?.relativePath ?? "Open a document first",
+        disabled: !activeDocument,
+        id: "format-horizontal-rule",
+        label: "Insert Horizontal Rule",
+        keywords: ["markdown", "rule"],
+      },
+      {
+        detail: activeDocument?.relativePath ?? "Open a document first",
+        disabled: !activeDocument,
+        id: "insert-footnote",
+        label: "Insert Footnote",
+        keywords: ["markdown", "note"],
+      },
+      {
+        detail: activeDocument?.relativePath ?? "Open a document first",
+        disabled: !activeDocument,
+        id: "insert-table",
+        label: "Insert Table",
+        keywords: ["markdown", "grid"],
+      },
+      {
+        detail: activeDocument?.relativePath ?? "Open a document first",
+        disabled: !activeDocument,
+        id: "insert-image",
+        label: "Insert Image",
+        keywords: ["markdown", "asset", "picture"],
+      },
+      {
         detail: workspace ? workspace.rootPath : "Open a workspace first",
         disabled: !workspace,
         id: "review-brief",
@@ -538,6 +688,27 @@ function App() {
         keywords: ["typewriter", "drafting", "zen"],
       },
       {
+        detail: `${editorZoomPercent}%`,
+        disabled: !workspace,
+        id: "zoom-in",
+        label: "Zoom In",
+        keywords: ["view", "larger", "text"],
+      },
+      {
+        detail: `${editorZoomPercent}%`,
+        disabled: !workspace,
+        id: "zoom-out",
+        label: "Zoom Out",
+        keywords: ["view", "smaller", "text"],
+      },
+      {
+        detail: `${editorZoomPercent}%`,
+        disabled: !workspace,
+        id: "zoom-actual-size",
+        label: "Actual Size",
+        keywords: ["view", "reset", "zoom", "100"],
+      },
+      {
         detail: themeMode === "system" ? "Active" : "Use default ledger theme",
         id: "theme-system",
         label: "Theme: Default",
@@ -577,6 +748,7 @@ function App() {
     ],
     [
       activeDocument,
+      editorZoomPercent,
       isEditorDirty,
       isFocusModeEnabled,
       isWorkspacePaneCollapsed,
@@ -747,6 +919,12 @@ function App() {
       return;
     }
 
+    const editorMenuCommand = EDITOR_PALETTE_COMMANDS[commandId];
+    if (editorMenuCommand) {
+      dispatchEditorMenuCommand(editorMenuCommand);
+      return;
+    }
+
     switch (commandId) {
       case "check-for-updates":
         void checkForUpdates();
@@ -787,6 +965,15 @@ function App() {
         break;
       case "toggle-focus-mode":
         useUiStore.getState().toggleFocusMode();
+        break;
+      case "zoom-actual-size":
+        useUiStore.getState().resetEditorZoom();
+        break;
+      case "zoom-in":
+        useUiStore.getState().zoomEditorIn();
+        break;
+      case "zoom-out":
+        useUiStore.getState().zoomEditorOut();
         break;
       case "theme-dark":
         useUiStore.getState().setThemeMode("dark");
@@ -854,6 +1041,11 @@ function App() {
 
   const handleAppMenuCommand = useCallback(
     (command: AppMenuCommand) => {
+      if (EDITOR_MENU_COMMAND_VALUES.has(command)) {
+        dispatchEditorMenuCommand(command);
+        return;
+      }
+
       switch (command) {
         case APP_MENU_COMMANDS.checkForUpdates:
           void checkForUpdates();
@@ -917,6 +1109,15 @@ function App() {
           break;
         case APP_MENU_COMMANDS.toggleFiles:
           useUiStore.getState().toggleWorkspacePane();
+          break;
+        case APP_MENU_COMMANDS.zoomActualSize:
+          useUiStore.getState().resetEditorZoom();
+          break;
+        case APP_MENU_COMMANDS.zoomIn:
+          useUiStore.getState().zoomEditorIn();
+          break;
+        case APP_MENU_COMMANDS.zoomOut:
+          useUiStore.getState().zoomEditorOut();
           break;
         case APP_MENU_COMMANDS.find:
         case APP_MENU_COMMANDS.save:
@@ -1360,6 +1561,18 @@ function App() {
     [activeDocument],
   );
 
+  const importImageAssetPathForActiveDocument = useCallback(
+    async (sourcePath: string) => {
+      const imported = await importWorkspaceAssetFromPath(sourcePath);
+      if (!activeDocument) {
+        return imported.relativePath;
+      }
+
+      return relativePathFromDocument(activeDocument.absolutePath, imported.absolutePath);
+    },
+    [activeDocument],
+  );
+
   return (
     <main
       className={`app-shell ${isFocusModeEnabled ? "is-focus-mode" : ""} ${
@@ -1582,6 +1795,7 @@ function App() {
                 document={activeDocument}
                 isThreadSaving={threadState.isSaving}
                 importImageAsset={importImageAssetForActiveDocument}
+                importImageAssetPath={importImageAssetPathForActiveDocument}
                 loadThread={threadState.loadThread}
                 navigationRequest={editorNavigationRequest}
                 onAcceptProposal={proposalState.acceptProposal}
@@ -1737,6 +1951,7 @@ const EditorPane = memo(function EditorPane({
   document,
   isThreadSaving,
   importImageAsset,
+  importImageAssetPath,
   loadThread,
   navigationRequest,
   onAcceptProposal,
@@ -1772,6 +1987,7 @@ const EditorPane = memo(function EditorPane({
   document: DocumentPayload | null;
   isThreadSaving: boolean;
   importImageAsset: (file: File) => Promise<string>;
+  importImageAssetPath: (sourcePath: string) => Promise<string>;
   loadThread: (threadId: string | null) => Promise<ThreadRecord | null>;
   navigationRequest: EditorNavigationRequest | null;
   onAcceptProposal: (proposalId: string, updatedDocumentText?: string) => Promise<void>;
@@ -1818,6 +2034,7 @@ const EditorPane = memo(function EditorPane({
       deleteThread={deleteThread}
       document={document}
       importImageAsset={importImageAsset}
+      importImageAssetPath={importImageAssetPath}
       isSaving={isSaving}
       isThreadSaving={isThreadSaving}
       loadThread={loadThread}
@@ -1877,12 +2094,13 @@ function relativePathFromDocument(documentAbsolutePath: string, targetAbsolutePa
 }
 
 function suggestedImageAssetName(file: File) {
-  if (file.name.trim()) {
+  const fileName = file.name.trim();
+  if (fileName && !isGenericClipboardImageName(fileName)) {
     return file.name;
   }
 
   const extension = imageMimeExtension(file.type) ?? "png";
-  return `pasted-image.${extension}`;
+  return `pasted-${timestampForAssetName()}.${extension}`;
 }
 
 function imageMimeExtension(mimeType: string) {
@@ -1898,9 +2116,28 @@ function imageMimeExtension(mimeType: string) {
       return "webp";
     case "image/avif":
       return "avif";
+    case "image/svg+xml":
+      return "svg";
     default:
       return null;
   }
+}
+
+function isGenericClipboardImageName(fileName: string) {
+  return /^(?:image|pasted-image)(?:\.[a-z0-9]+)?$/i.test(fileName.trim());
+}
+
+function timestampForAssetName(date = new Date()) {
+  const pad = (value: number) => String(value).padStart(2, "0");
+  return [
+    date.getFullYear(),
+    pad(date.getMonth() + 1),
+    pad(date.getDate()),
+    "-",
+    pad(date.getHours()),
+    pad(date.getMinutes()),
+    pad(date.getSeconds()),
+  ].join("");
 }
 
 function WorkspaceEffects() {

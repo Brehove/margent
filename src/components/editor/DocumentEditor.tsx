@@ -29,11 +29,15 @@ import {
   APP_MENU_DOM_EVENT,
   isAppMenuCommand,
 } from "../../lib/appMenuCommands";
-import { convertLocalFileSrc, isDesktopBackend } from "../../lib/backend";
+import { convertLocalFileSrc, isDesktopBackend, openBackend } from "../../lib/backend";
+import { getErrorMessage } from "../../lib/errorMessage";
 import { measurePerf } from "../../lib/devPerf";
 import {
   COMMENT_DOCK_MAX_WIDTH,
   COMMENT_DOCK_MIN_WIDTH,
+  EDITOR_ZOOM_DEFAULT_PERCENT,
+  EDITOR_ZOOM_MAX_PERCENT,
+  EDITOR_ZOOM_MIN_PERCENT,
   useUiStore,
   type EditorMode,
   type PreferredAgentProvider,
@@ -42,8 +46,15 @@ import { useWorkspaceStore } from "../../stores/workspaceStore";
 import {
   useCodeMirror,
   type ActiveFootnoteDefinition,
+  type ActiveMarkdownImage,
   type ActiveMarkdownLink,
 } from "./useCodeMirror";
+import { FormattingToolbar } from "./FormattingToolbar";
+import {
+  emptyFormattingContext,
+  type MarkdownFormattingCommand,
+} from "./markdownFormatting";
+import type { MarkdownTableCommand } from "./markdownTable";
 import type { ProposalReviewEditorState } from "./cm/proposalReviewExtension";
 import { ProposalDiffPreview } from "./ProposalDiffPreview";
 import { invokeBackend } from "../../lib/backend";
@@ -90,6 +101,7 @@ interface DocumentEditorProps {
   isSaving: boolean;
   isThreadSaving: boolean;
   importImageAsset?: (file: File) => Promise<string>;
+  importImageAssetPath?: (path: string) => Promise<string>;
   loadThread: (threadId: string | null) => Promise<ThreadRecord | null>;
   navigationRequest?: {
     id: number;
@@ -171,6 +183,25 @@ const noopProviderThreadAction = async () => {};
 const noopProviderDocumentAction = async () => {};
 const noopCancelProviderRun = async () => {};
 const noopReviewPassChange = () => {};
+const MENU_FORMATTING_COMMANDS: Record<string, MarkdownFormattingCommand> = {
+  [APP_MENU_COMMANDS.formatBlockquote]: "blockquote",
+  [APP_MENU_COMMANDS.formatBold]: "bold",
+  [APP_MENU_COMMANDS.formatBulletList]: "bullet-list",
+  [APP_MENU_COMMANDS.formatCodeBlock]: "code-block",
+  [APP_MENU_COMMANDS.formatHeading1]: "heading-1",
+  [APP_MENU_COMMANDS.formatHeading2]: "heading-2",
+  [APP_MENU_COMMANDS.formatHeading3]: "heading-3",
+  [APP_MENU_COMMANDS.formatHeading4]: "heading-4",
+  [APP_MENU_COMMANDS.formatHorizontalRule]: "horizontal-rule",
+  [APP_MENU_COMMANDS.formatInlineCode]: "inline-code",
+  [APP_MENU_COMMANDS.formatItalic]: "italic",
+  [APP_MENU_COMMANDS.formatOrderedList]: "ordered-list",
+  [APP_MENU_COMMANDS.formatParagraph]: "paragraph",
+  [APP_MENU_COMMANDS.formatStrikethrough]: "strikethrough",
+  [APP_MENU_COMMANDS.formatTaskList]: "task-list",
+  [APP_MENU_COMMANDS.insertFootnote]: "footnote",
+  [APP_MENU_COMMANDS.insertTable]: "table",
+};
 
 type ThreadMessageBodySegment =
   | {
@@ -192,6 +223,7 @@ export const DocumentEditor = memo(function DocumentEditor({
   isSaving,
   isThreadSaving,
   importImageAsset,
+  importImageAssetPath,
   loadThread,
   navigationRequest = null,
   onAcceptProposal = noopProposalAction,
@@ -244,6 +276,9 @@ export const DocumentEditor = memo(function DocumentEditor({
     useState<ActiveFootnoteDefinition | null>(null);
   const [footnoteEditorLabel, setFootnoteEditorLabel] = useState("");
   const [footnoteEditorContent, setFootnoteEditorContent] = useState("");
+  const [activeImage, setActiveImage] = useState<ActiveMarkdownImage | null>(null);
+  const [imageEditorAlt, setImageEditorAlt] = useState("");
+  const [imageEditorWidth, setImageEditorWidth] = useState("");
   const [activeLink, setActiveLink] = useState<ActiveMarkdownLink | null>(null);
   const [pendingLinkSelection, setPendingLinkSelection] =
     useState<EditorSelectionSnapshot | null>(null);
@@ -257,14 +292,21 @@ export const DocumentEditor = memo(function DocumentEditor({
   const [rightDockView, setRightDockView] = useState<RightDockView>("threads");
   const commentDockWidth = useUiStore((state) => state.commentDockWidth);
   const editorMode = useUiStore((state) => state.editorMode);
+  const editorZoomPercent = useUiStore((state) => state.editorZoomPercent);
   const isDocumentOutlineVisible = useUiStore((state) => state.isDocumentOutlineVisible);
   const isFocusModeEnabled = useUiStore((state) => state.isFocusModeEnabled);
+  const isFormattingToolbarVisible = useUiStore((state) => state.isFormattingToolbarVisible);
   const preferredAgentProvider = useUiStore((state) => state.preferredAgentProvider);
   const setCommentDockWidth = useUiStore((state) => state.setCommentDockWidth);
   const setEditorMode = useUiStore((state) => state.setEditorMode);
+  const resetEditorZoom = useUiStore((state) => state.resetEditorZoom);
   const toggleDocumentOutline = useUiStore((state) => state.toggleDocumentOutline);
   const toggleFocusMode = useUiStore((state) => state.toggleFocusMode);
+  const toggleFormattingToolbar = useUiStore((state) => state.toggleFormattingToolbar);
+  const zoomEditorIn = useUiStore((state) => state.zoomEditorIn);
+  const zoomEditorOut = useUiStore((state) => state.zoomEditorOut);
   const setPreferredAgentProvider = useUiStore((state) => state.setPreferredAgentProvider);
+  const setWorkspaceErrorMessage = useWorkspaceStore((state) => state.setErrorMessage);
   const editorProposalReview =
     inlineProposalReview &&
     document &&
@@ -293,10 +335,18 @@ export const DocumentEditor = memo(function DocumentEditor({
     pendingAcceptedHunkLocationRef.current = { documentId, lineNumber };
   }, []);
 
-  const { session, sessionMetrics, sessionSnapshot, setHostElement } = useCodeMirror({
+  const {
+    formattingContext = emptyFormattingContext,
+    session,
+    sessionMetrics,
+    sessionSnapshot,
+    setHostElement,
+  } = useCodeMirror({
     editorMode,
+    editorZoomPercent,
     isFocusModeEnabled,
     onActiveFootnoteDefinitionChange: setActiveFootnoteDefinition,
+    onActiveImageChange: setActiveImage,
     onActiveLinkChange: setActiveLink,
     onCreateLinkRequested: handleCreateLinkRequested,
     onFocusModeTypingActivity,
@@ -313,6 +363,7 @@ export const DocumentEditor = memo(function DocumentEditor({
   const isDirty = sessionSnapshot.isDirty;
   const lineCount = sessionMetrics.lineCount;
   const characterCount = sessionMetrics.characterCount;
+  const wordCount = sessionMetrics.wordCount ?? document?.wordCount ?? 0;
 
   function handleSelectionChange(selection: EditorSelectionSnapshot | null) {
     if (!selection || !hostRef.current) {
@@ -463,6 +514,11 @@ export const DocumentEditor = memo(function DocumentEditor({
     setFootnoteEditorLabel(activeFootnoteDefinition?.label ?? "");
     setFootnoteEditorContent(activeFootnoteDefinition?.content ?? "");
   }, [activeFootnoteDefinition?.from, activeFootnoteDefinition?.to, activeFootnoteDefinition?.label, activeFootnoteDefinition?.content]);
+
+  useEffect(() => {
+    setImageEditorAlt(activeImage?.alt ?? "");
+    setImageEditorWidth(activeImage?.width ?? "");
+  }, [activeImage?.from, activeImage?.to, activeImage?.alt, activeImage?.width]);
 
   useEffect(() => {
     setLinkEditorLabel(activeLink?.label ?? "");
@@ -801,6 +857,87 @@ export const DocumentEditor = memo(function DocumentEditor({
     session.openSearch();
   }, [session]);
 
+  const handleFormattingCommand = useCallback(
+    (command: MarkdownFormattingCommand) => {
+      session.formatMarkdown(command);
+    },
+    [session],
+  );
+
+  const handleTableCommand = useCallback(
+    (command: MarkdownTableCommand) => {
+      session.formatMarkdownTable(command);
+    },
+    [session],
+  );
+
+  const handleToolbarLink = useCallback(() => {
+    if (activeLink) {
+      updateLinkEditorFrame();
+      return;
+    }
+
+    const selection = session.getSelectionSnapshot();
+    if (!selection) {
+      return;
+    }
+
+    handleCreateLinkRequested(selection);
+  }, [activeLink, handleCreateLinkRequested, session, updateLinkEditorFrame]);
+
+  const handleToolbarImage = useCallback(async () => {
+    if (!importImageAssetPath) {
+      session.focus();
+      return;
+    }
+
+    try {
+      const selected = await openBackend({
+        directory: false,
+        filters: [
+          {
+            extensions: [
+              "png",
+              "jpg",
+              "jpeg",
+              "gif",
+              "webp",
+              "avif",
+              "svg",
+              "heic",
+              "heif",
+              "tif",
+              "tiff",
+              "bmp",
+            ],
+            name: "Images",
+          },
+        ],
+        multiple: true,
+      });
+      const selectedPaths = (Array.isArray(selected) ? selected : selected ? [selected] : [])
+        .filter((path): path is string => typeof path === "string" && path.trim().length > 0);
+
+      if (selectedPaths.length === 0) {
+        session.focus();
+        return;
+      }
+
+      const importedImages = [];
+      for (const path of selectedPaths) {
+        importedImages.push({
+          fileName: fileNameFromPath(path),
+          relativePath: await importImageAssetPath(path),
+        });
+      }
+
+      session.insertMarkdownImages(importedImages);
+    } catch (error) {
+      setWorkspaceErrorMessage(getErrorMessage(error, "Unable to insert image."));
+      session.focus();
+    }
+  }, [importImageAssetPath, session, setWorkspaceErrorMessage]);
+
   const getCommentDockWidthBounds = useCallback(() => {
     const viewportMax =
       typeof window === "undefined"
@@ -941,6 +1078,17 @@ export const DocumentEditor = memo(function DocumentEditor({
 
       if (command === APP_MENU_COMMANDS.save) {
         saveDirtyDocument();
+        return;
+      }
+
+      if (command === APP_MENU_COMMANDS.insertImage) {
+        handleToolbarImage();
+        return;
+      }
+
+      const formattingCommand = MENU_FORMATTING_COMMANDS[command];
+      if (formattingCommand) {
+        session.formatMarkdown(formattingCommand);
       }
     };
 
@@ -950,7 +1098,7 @@ export const DocumentEditor = memo(function DocumentEditor({
       window.removeEventListener("keydown", handleKeydown);
       window.removeEventListener(APP_MENU_DOM_EVENT, handleMenuCommand);
     };
-  }, [document, isSaving, onSave, session]);
+  }, [document, handleToolbarImage, isSaving, onSave, session]);
 
   useEffect(() => {
     if (!document || !isDirty || isSaving) {
@@ -1116,6 +1264,22 @@ export const DocumentEditor = memo(function DocumentEditor({
     [activeFootnoteDefinition, footnoteEditorContent, footnoteEditorLabel, session],
   );
 
+  const handleApplyImageEdit = useCallback(
+    (event?: FormEvent) => {
+      event?.preventDefault();
+      if (!activeImage) {
+        return;
+      }
+
+      session.updateMarkdownImage(activeImage, {
+        alt: imageEditorAlt,
+        width: imageEditorWidth.trim() ? imageEditorWidth : null,
+      });
+      session.focus();
+    },
+    [activeImage, imageEditorAlt, imageEditorWidth, session],
+  );
+
   const handleFocusFootnoteDefinition = useCallback(() => {
     if (!activeFootnoteDefinition) {
       return;
@@ -1166,6 +1330,7 @@ export const DocumentEditor = memo(function DocumentEditor({
         characterCount={characterCount}
         document={document}
         editorMode={editorMode}
+        editorZoomPercent={editorZoomPercent}
         isFocusModeEnabled={isFocusModeEnabled}
         isDirty={isDirty}
         isSaving={isSaving}
@@ -1173,8 +1338,23 @@ export const DocumentEditor = memo(function DocumentEditor({
         onEditorModeChange={setEditorMode}
         onFind={handleFind}
         onFocusModeToggle={toggleFocusMode}
+        onZoomActualSize={resetEditorZoom}
+        onZoomIn={zoomEditorIn}
+        onZoomOut={zoomEditorOut}
         onSave={handleSave}
         threadCount={threads.filter((thread) => thread.status === "open").length}
+        wordCount={wordCount}
+      />
+
+      <FormattingToolbar
+        context={formattingContext}
+        disabled={!document}
+        isVisible={isFormattingToolbarVisible}
+        onCommand={handleFormattingCommand}
+        onImage={handleToolbarImage}
+        onLink={handleToolbarLink}
+        onTableCommand={handleTableCommand}
+        onToggleVisible={toggleFormattingToolbar}
       />
 
       <div
@@ -1193,11 +1373,15 @@ export const DocumentEditor = memo(function DocumentEditor({
         ) : null}
         <EditorSurface
           activeFootnoteDefinition={activeFootnoteDefinition}
+          activeImage={activeImage}
           activeLink={activeLink}
           editorMode={editorMode}
           footnoteEditorContent={footnoteEditorContent}
           footnoteEditorLabel={footnoteEditorLabel}
+          imageEditorAlt={imageEditorAlt}
+          imageEditorWidth={imageEditorWidth}
           onApplyFootnoteEdit={handleApplyFootnoteEdit}
+          onApplyImageEdit={handleApplyImageEdit}
           linkEditorLabel={linkEditorLabel}
           linkEditorUrl={linkEditorUrl}
           linkEditorFrame={linkEditorFrame}
@@ -1205,6 +1389,8 @@ export const DocumentEditor = memo(function DocumentEditor({
           onCancelLinkCreate={handleCancelLinkCreate}
           onFootnoteEditorContentChange={setFootnoteEditorContent}
           onFootnoteEditorLabelChange={setFootnoteEditorLabel}
+          onImageEditorAltChange={setImageEditorAlt}
+          onImageEditorWidthChange={setImageEditorWidth}
           onFocusFootnoteDefinition={handleFocusFootnoteDefinition}
           onApplyLinkEdit={handleApplyLinkEdit}
           onLinkEditorUrlChange={setLinkEditorUrl}
@@ -1296,6 +1482,7 @@ const EditorHeader = memo(function EditorHeader({
   characterCount,
   document,
   editorMode,
+  editorZoomPercent,
   isFocusModeEnabled,
   isDirty,
   isSaving,
@@ -1303,12 +1490,17 @@ const EditorHeader = memo(function EditorHeader({
   onEditorModeChange,
   onFind,
   onFocusModeToggle,
+  onZoomActualSize,
+  onZoomIn,
+  onZoomOut,
   onSave,
   threadCount,
+  wordCount,
 }: {
   characterCount: number;
   document: DocumentPayload;
   editorMode: EditorMode;
+  editorZoomPercent: number;
   isFocusModeEnabled: boolean;
   isDirty: boolean;
   isSaving: boolean;
@@ -1316,8 +1508,12 @@ const EditorHeader = memo(function EditorHeader({
   onEditorModeChange: (editorMode: EditorMode) => void;
   onFind: () => void;
   onFocusModeToggle: () => void;
+  onZoomActualSize: () => void;
+  onZoomIn: () => void;
+  onZoomOut: () => void;
   onSave: () => void;
   threadCount: number;
+  wordCount: number;
 }) {
   const openThreadCount = threadCount;
   const statusLabel = isSaving ? "Saving" : isDirty ? "Unsaved changes" : "Saved";
@@ -1338,7 +1534,7 @@ const EditorHeader = memo(function EditorHeader({
           />
           <details className="stats-detail">
             <summary>
-              <span>{document.wordCount} words</span>
+              <span>{wordCount} words</span>
               {openThreadCount ? (
                 <span>
                   {openThreadCount} open thread{openThreadCount === 1 ? "" : "s"}
@@ -1375,6 +1571,40 @@ const EditorHeader = memo(function EditorHeader({
             Raw
           </button>
         </div>
+        <div aria-label="Editor zoom" className="editor-zoom-control">
+          <button
+            aria-label="Zoom out"
+            className="ghost-button editor-zoom-button"
+            disabled={editorZoomPercent <= EDITOR_ZOOM_MIN_PERCENT}
+            onClick={onZoomOut}
+            title="Zoom out"
+            type="button"
+          >
+            -
+          </button>
+          <button
+            aria-label="Reset editor zoom"
+            className={`ghost-button editor-zoom-value ${
+              editorZoomPercent === EDITOR_ZOOM_DEFAULT_PERCENT ? "is-default" : ""
+            }`}
+            disabled={editorZoomPercent === EDITOR_ZOOM_DEFAULT_PERCENT}
+            onClick={onZoomActualSize}
+            title="Actual size"
+            type="button"
+          >
+            {editorZoomPercent}%
+          </button>
+          <button
+            aria-label="Zoom in"
+            className="ghost-button editor-zoom-button"
+            disabled={editorZoomPercent >= EDITOR_ZOOM_MAX_PERCENT}
+            onClick={onZoomIn}
+            title="Zoom in"
+            type="button"
+          >
+            +
+          </button>
+        </div>
         <button className="ghost-button editor-find-button" onClick={onFind} type="button">
           Find
         </button>
@@ -1400,16 +1630,22 @@ const EditorHeader = memo(function EditorHeader({
 
 const EditorSurface = memo(function EditorSurface({
   activeFootnoteDefinition,
+  activeImage,
   activeLink,
   editorMode,
   footnoteEditorContent,
   footnoteEditorLabel,
+  imageEditorAlt,
+  imageEditorWidth,
   isCreatingLink,
   onApplyFootnoteEdit,
+  onApplyImageEdit,
   onCancelLinkCreate,
   onFootnoteEditorContentChange,
   onFootnoteEditorLabelChange,
   onFocusFootnoteDefinition,
+  onImageEditorAltChange,
+  onImageEditorWidthChange,
   linkEditorLabel,
   linkEditorFrame,
   linkEditorUrl,
@@ -1419,16 +1655,22 @@ const EditorSurface = memo(function EditorSurface({
   setEditorHost,
 }: {
   activeFootnoteDefinition: ActiveFootnoteDefinition | null;
+  activeImage: ActiveMarkdownImage | null;
   activeLink: ActiveMarkdownLink | null;
   editorMode: EditorMode;
   footnoteEditorContent: string;
   footnoteEditorLabel: string;
+  imageEditorAlt: string;
+  imageEditorWidth: string;
   isCreatingLink: boolean;
   onApplyFootnoteEdit: (event?: FormEvent) => void;
+  onApplyImageEdit: (event?: FormEvent) => void;
   onCancelLinkCreate: () => void;
   onFootnoteEditorContentChange: Dispatch<SetStateAction<string>>;
   onFootnoteEditorLabelChange: Dispatch<SetStateAction<string>>;
   onFocusFootnoteDefinition: () => void;
+  onImageEditorAltChange: Dispatch<SetStateAction<string>>;
+  onImageEditorWidthChange: Dispatch<SetStateAction<string>>;
   linkEditorLabel: string;
   linkEditorFrame: LinkEditorFrame | null;
   linkEditorUrl: string;
@@ -1481,6 +1723,55 @@ const EditorSurface = memo(function EditorSurface({
                 Remove
               </button>
             )}
+          </form>
+        ) : editorMode === "rendered" && activeImage ? (
+          <form className="image-editor-bar" onSubmit={onApplyImageEdit}>
+            <div className="footnote-editor-title-group">
+              <p className="eyebrow-lbl">Editing image</p>
+              <p className="footnote-editor-caption">{activeImage.source}</p>
+            </div>
+            <label className="link-editor-field image-editor-alt-field">
+              <span>Alt</span>
+              <input
+                onChange={(event) => onImageEditorAltChange(event.target.value)}
+                type="text"
+                value={imageEditorAlt}
+              />
+            </label>
+            <div className="link-editor-field image-editor-width-field">
+              <span>Width</span>
+              <div className="image-width-controls">
+                {["320px", "480px", "640px", "100%"].map((width) => (
+                  <button
+                    className={imageEditorWidth === width ? "format-button is-active" : "format-button"}
+                    key={width}
+                    onClick={() => onImageEditorWidthChange(width)}
+                    type="button"
+                  >
+                    {width === "100%" ? "Full" : width.replace("px", "")}
+                  </button>
+                ))}
+                <button
+                  className={!imageEditorWidth ? "format-button is-active" : "format-button"}
+                  onClick={() => onImageEditorWidthChange("")}
+                  type="button"
+                >
+                  Auto
+                </button>
+                <input
+                  aria-label="Custom image width"
+                  onChange={(event) => onImageEditorWidthChange(event.target.value)}
+                  placeholder="480px"
+                  type="text"
+                  value={imageEditorWidth}
+                />
+              </div>
+            </div>
+            <div className="footnote-editor-actions">
+              <button className="primary-button" type="submit">
+                Apply
+              </button>
+            </div>
           </form>
         ) : editorMode === "rendered" && activeFootnoteDefinition ? (
           <form className="footnote-editor-bar" onSubmit={onApplyFootnoteEdit}>
@@ -3255,6 +3546,10 @@ function splitImageSourceSuffix(source: string): [string, string] {
   }
 
   return [source.slice(0, suffixIndex), source.slice(suffixIndex)];
+}
+
+function fileNameFromPath(path: string) {
+  return path.split(/[\\/]/).filter(Boolean).pop() ?? "image";
 }
 
 function normalizeAbsolutePath(path: string) {

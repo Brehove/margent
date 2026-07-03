@@ -148,6 +148,12 @@ enum Commands {
         action: FilesAction,
     },
 
+    /// Workspace image asset inventory and dry-run cleanup
+    Assets {
+        #[command(subcommand)]
+        action: AssetsAction,
+    },
+
     /// Export a Markdown document to HTML, DOCX, PDF instructions, or Google Docs
     Export {
         /// Relative path to the document
@@ -329,6 +335,19 @@ enum FilesAction {
     Outline {
         /// Relative path to the document
         document: String,
+    },
+}
+
+#[derive(Subcommand)]
+enum AssetsAction {
+    /// List files under assets/ and Markdown image references to them
+    List,
+
+    /// Plan removal of unreferenced assets
+    Gc {
+        /// Show files that would be removed without deleting anything
+        #[arg(long)]
+        dry_run: bool,
     },
 }
 
@@ -621,6 +640,7 @@ fn main() {
         Commands::Events { action } => cmd_events(action, output),
         Commands::Proposals { action } => cmd_proposals(action, output),
         Commands::Files { action } => cmd_files(action, output),
+        Commands::Assets { action } => cmd_assets(action, output),
         Commands::Export {
             document,
             format,
@@ -1970,6 +1990,108 @@ fn cmd_files(action: FilesAction, output: OutputFormat) -> Result<(), String> {
             Ok(())
         }
     }
+}
+
+fn cmd_assets(action: AssetsAction, output: OutputFormat) -> Result<(), String> {
+    let cwd =
+        env::current_dir().map_err(|e| format!("Unable to determine current directory: {e}"))?;
+    let root = workspace::find_workspace_root(&cwd)?;
+    let report = load_asset_scan_report(&root)?;
+
+    match action {
+        AssetsAction::List => {
+            if output.is_json() {
+                return print_json(&json!({
+                    "workspaceRoot": root,
+                    "assetsDir": &report.assets_dir,
+                    "assets": &report.assets,
+                    "assetCount": report.assets.len(),
+                    "references": &report.references,
+                    "referenceCount": report.references.len(),
+                    "orphanedAssets": &report.orphaned_assets,
+                    "missingAssets": &report.missing_assets,
+                    "action": "assetsListed",
+                }));
+            }
+
+            println!("Workspace: {}", root.display());
+            if report.assets.is_empty() {
+                println!("No files found under assets/.");
+            } else {
+                println!("Assets:");
+                for asset in &report.assets {
+                    let status = if asset.referenced { "used" } else { "unused" };
+                    println!(
+                        "  [{status}] {} ({} reference(s))",
+                        asset.relative_path, asset.reference_count
+                    );
+                }
+            }
+            if !report.missing_assets.is_empty() {
+                println!("\nMissing referenced assets:");
+                for asset in &report.missing_assets {
+                    println!("  {asset}");
+                }
+            }
+            Ok(())
+        }
+        AssetsAction::Gc { dry_run } => {
+            if !dry_run {
+                return Err("Asset GC currently requires --dry-run; no files were deleted.".into());
+            }
+
+            if output.is_json() {
+                return print_json(&json!({
+                    "workspaceRoot": root,
+                    "dryRun": true,
+                    "wouldDelete": &report.orphaned_assets,
+                    "deleteCount": report.orphaned_assets.len(),
+                    "missingAssets": &report.missing_assets,
+                    "action": "assetGcPlanned",
+                }));
+            }
+
+            println!("Workspace: {}", root.display());
+            println!("Mode: dry run");
+            if report.orphaned_assets.is_empty() {
+                println!("No unreferenced assets found.");
+            } else {
+                println!("Would delete:");
+                for asset in &report.orphaned_assets {
+                    println!("  {asset}");
+                }
+            }
+            if !report.missing_assets.is_empty() {
+                println!("\nMissing referenced assets:");
+                for asset in &report.missing_assets {
+                    println!("  {asset}");
+                }
+            }
+            Ok(())
+        }
+    }
+}
+
+fn load_asset_scan_report(root: &Path) -> Result<margent_core::assets::AssetScanReport, String> {
+    let mut documents = workspace::load_all_documents(root)?;
+    documents.sort_by(|left, right| left.relative_path.cmp(&right.relative_path));
+
+    let mut document_contents = Vec::<(String, String)>::new();
+    for document in documents {
+        let content = workspace::read_document_content(root, &document.relative_path)?;
+        document_contents.push((document.relative_path, content));
+    }
+
+    let scan_documents = document_contents
+        .iter()
+        .map(
+            |(relative_path, content)| margent_core::assets::MarkdownAssetDocument {
+                relative_path,
+                content,
+            },
+        )
+        .collect::<Vec<_>>();
+    margent_core::assets::scan_workspace_assets(root, &scan_documents)
 }
 
 fn cmd_export(
@@ -3704,6 +3826,58 @@ mod tests {
             }
             _ => panic!("expected export command"),
         }
+    }
+
+    #[test]
+    fn parses_assets_commands() {
+        let list = Cli::try_parse_from(["margent", "assets", "list", "--json"])
+            .expect("parse assets list");
+        assert!(list.json);
+        assert!(matches!(
+            list.command,
+            Commands::Assets {
+                action: AssetsAction::List
+            }
+        ));
+
+        let gc = Cli::try_parse_from(["margent", "assets", "gc", "--dry-run", "--json"])
+            .expect("parse assets gc dry run");
+        assert!(gc.json);
+        match gc.command {
+            Commands::Assets {
+                action: AssetsAction::Gc { dry_run },
+            } => assert!(dry_run),
+            _ => panic!("expected assets gc command"),
+        }
+    }
+
+    #[test]
+    fn asset_scan_report_uses_indexed_workspace_documents() {
+        let root = temp_root("assets-report");
+        fs::create_dir_all(root.join("assets")).expect("assets dir");
+        fs::write(root.join("assets/used.png"), b"used").expect("used asset");
+        fs::write(root.join("assets/orphan.png"), b"orphan").expect("orphan asset");
+        fs::write(
+            root.join("draft.md"),
+            "![Used](assets/used.png){width=480px}\n",
+        )
+        .expect("document");
+        workspace::ensure_workspace_layout(&root).expect("layout");
+        workspace::upsert_document_record(
+            &root,
+            "draft.md",
+            "![Used](assets/used.png){width=480px}\n",
+        )
+        .expect("document record");
+
+        let report = load_asset_scan_report(&root).expect("scan report");
+
+        assert_eq!(report.assets.len(), 2);
+        assert_eq!(report.references.len(), 1);
+        assert_eq!(report.orphaned_assets, vec!["assets/orphan.png"]);
+        assert_eq!(report.references[0].asset_path, "assets/used.png");
+
+        fs::remove_dir_all(root).expect("cleanup");
     }
 
     #[test]

@@ -242,8 +242,15 @@ describe("app viewport layout CSS", () => {
     expect(editorContentRule).toContain("118ch");
     expect(editorContentRule).not.toContain("72ch");
     expect(editorContentRule).toContain("font-family: var(--font-body)");
-    expect(editorContentRule).toContain("font-size: 16px");
+    expect(editorContentRule).toContain("font-size: var(--editor-body-font-size, 16px)");
     expect(editorContentRule).toContain("line-height: 1.65");
+    expect(TOKENS_CSS).toContain("--editor-body-font-size: 16px");
+    expect(TOKENS_CSS).toContain("--editor-readable-font-size: 17px");
+    expect(cssRuleContaining(".code-editor-host", "--editor-body-font-size: 16px")).toContain(
+      "--editor-body-font-size: 16px",
+    );
+    expect(lastCssRule(".code-editor-host")).not.toContain("zoom:");
+    expect(lastCssRule(".code-editor-host .cm-editor")).not.toContain("transform:");
   });
 
   it("keeps editor surfaces and ink theme-aware", () => {

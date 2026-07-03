@@ -10,12 +10,15 @@ use pulldown_cmark::{html, CowStr, Event, Options, Parser, Tag};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
+use crate::assets::{parse_standalone_attributed_image_line, MarkdownImage};
 use crate::document::DocumentRecord;
 use crate::id::new_id;
 use crate::io::write_string_atomic;
 
 const GOOGLE_DOC_MIME_TYPE: &str = "application/vnd.google-apps.document";
 const MAX_INLINE_IMAGE_BYTES: u64 = 8 * 1024 * 1024;
+const PANDOC_MARKDOWN_INPUT_FORMAT: &str =
+    "markdown+pipe_tables+footnotes+task_lists+strikeout+yaml_metadata_block+link_attributes-auto_identifiers";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -221,7 +224,7 @@ pub fn write_docx_export(
         .arg(source_file)
         .args([
             "--from",
-            "markdown+pipe_tables+footnotes+task_lists+strikeout+yaml_metadata_block-auto_identifiers",
+            PANDOC_MARKDOWN_INPUT_FORMAT,
             "--to",
             "docx",
             "--standalone",
@@ -249,7 +252,8 @@ pub fn render_standalone_html(
     document_dir: Option<&Path>,
 ) -> String {
     let title = document_title(document, markdown);
-    let markdown_body = strip_yaml_frontmatter(markdown);
+    let markdown_body =
+        preprocess_standalone_image_attributes(strip_yaml_frontmatter(markdown), document_dir);
     let mut options = Options::empty();
     options.insert(Options::ENABLE_TABLES);
     options.insert(Options::ENABLE_FOOTNOTES);
@@ -257,7 +261,7 @@ pub fn render_standalone_html(
     options.insert(Options::ENABLE_TASKLISTS);
     options.insert(Options::ENABLE_SMART_PUNCTUATION);
 
-    let parser = Parser::new_ext(markdown_body, options).map(|event| match event {
+    let parser = Parser::new_ext(&markdown_body, options).map(|event| match event {
         Event::Start(Tag::Image {
             link_type,
             dest_url,
@@ -348,6 +352,135 @@ hr {{ border: 0; border-top: 1px solid var(--margent-rule); margin: 2em 0; }}
         escape_html_text(&title),
         body
     )
+}
+
+fn preprocess_standalone_image_attributes(markdown: &str, document_dir: Option<&Path>) -> String {
+    let mut output = String::with_capacity(markdown.len());
+    let mut changed = false;
+
+    for segment in markdown.split_inclusive('\n') {
+        let (line, line_ending) = split_line_ending(segment);
+        if let Some(image) = parse_standalone_attributed_image_line(line) {
+            output.push_str(&render_attributed_image_html(&image, document_dir));
+            output.push_str(line_ending);
+            changed = true;
+        } else {
+            output.push_str(segment);
+        }
+    }
+
+    if changed {
+        output
+    } else {
+        markdown.to_string()
+    }
+}
+
+fn split_line_ending(line: &str) -> (&str, &str) {
+    if let Some(body) = line.strip_suffix("\r\n") {
+        (body, "\r\n")
+    } else if let Some(body) = line.strip_suffix('\n') {
+        (body, "\n")
+    } else {
+        (line, "")
+    }
+}
+
+fn render_attributed_image_html(image: &MarkdownImage, document_dir: Option<&Path>) -> String {
+    let source = inline_image_data_uri(document_dir, &image.destination)
+        .unwrap_or_else(|| image.destination.clone());
+    let mut attributes = vec![
+        format!(r#"src="{}""#, escape_html_text(&source)),
+        format!(r#"alt="{}""#, escape_html_text(&image.alt)),
+    ];
+
+    if let Some(title) = image.title.as_deref().filter(|title| !title.is_empty()) {
+        attributes.push(format!(r#"title="{}""#, escape_html_text(title)));
+    }
+    if let Some(id) = image.attributes.id.as_deref().filter(|id| !id.is_empty()) {
+        attributes.push(format!(r#"id="{}""#, escape_html_text(id)));
+    }
+    if !image.attributes.classes.is_empty() {
+        attributes.push(format!(
+            r#"class="{}""#,
+            escape_html_text(&image.attributes.classes.join(" "))
+        ));
+    }
+
+    let mut styles = Vec::new();
+    if let Some(width) = image
+        .attributes
+        .value("width")
+        .and_then(normalize_css_length)
+    {
+        if let Some(pixel_width) = integer_pixel_length(&width) {
+            attributes.push(format!(r#"width="{pixel_width}""#));
+        }
+        styles.push(format!("width: {width};"));
+    }
+    if let Some(height) = image
+        .attributes
+        .value("height")
+        .and_then(normalize_css_length)
+    {
+        if let Some(pixel_height) = integer_pixel_length(&height) {
+            attributes.push(format!(r#"height="{pixel_height}""#));
+        }
+        styles.push(format!("height: {height};"));
+    }
+    if !styles.is_empty() {
+        attributes.push(format!(
+            r#"style="{}""#,
+            escape_html_text(&styles.join(" "))
+        ));
+    }
+
+    format!("<img {}>", attributes.join(" "))
+}
+
+fn normalize_css_length(value: &str) -> Option<String> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+
+    let mut seen_digit = false;
+    let mut seen_dot = false;
+    let mut numeric_end = 0usize;
+    for (index, character) in trimmed.char_indices() {
+        if character.is_ascii_digit() {
+            seen_digit = true;
+            numeric_end = index + character.len_utf8();
+        } else if character == '.' && !seen_dot {
+            seen_dot = true;
+            numeric_end = index + character.len_utf8();
+        } else {
+            break;
+        }
+    }
+    if !seen_digit {
+        return None;
+    }
+
+    let number = &trimmed[..numeric_end];
+    let unit = trimmed[numeric_end..].trim();
+    if unit.is_empty() {
+        return Some(format!("{number}px"));
+    }
+
+    let normalized_unit = unit.to_ascii_lowercase();
+    let allowed = [
+        "px", "%", "em", "rem", "in", "cm", "mm", "pt", "pc", "vw", "vh", "vmin", "vmax",
+    ];
+    allowed
+        .contains(&normalized_unit.as_str())
+        .then(|| format!("{number}{normalized_unit}"))
+}
+
+fn integer_pixel_length(value: &str) -> Option<&str> {
+    let number = value.strip_suffix("px")?;
+    (!number.contains('.') && number.chars().all(|character| character.is_ascii_digit()))
+        .then_some(number)
 }
 
 pub fn upload_google_doc(
@@ -698,6 +831,44 @@ mod tests {
         );
 
         let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn html_export_renders_image_width_attributes_without_raw_attribute_text() {
+        let dir = std::env::temp_dir().join(new_id("margent_core_export_width_test"));
+        fs::create_dir_all(dir.join("assets")).expect("create assets dir");
+        fs::write(dir.join("assets").join("pic.png"), b"not-a-real-png").expect("write image");
+
+        let doc = document("draft.md");
+        let html =
+            render_standalone_html(&doc, "![Local](assets/pic.png){width=480px}\n", Some(&dir));
+
+        assert!(
+            html.contains("data:image/png;base64,"),
+            "local attributed image should still inline as data URI: {html}"
+        );
+        assert!(
+            html.contains(r#"width="480""#),
+            "pixel width should render as an image attribute: {html}"
+        );
+        assert!(
+            html.contains(r#"style="width: 480px;""#),
+            "CSS width should preserve the source unit: {html}"
+        );
+        assert!(
+            !html.contains("{width=480px}"),
+            "raw Pandoc image attribute text should not leak into HTML: {html}"
+        );
+
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn docx_export_input_format_enables_link_attributes() {
+        assert!(
+            PANDOC_MARKDOWN_INPUT_FORMAT.contains("+link_attributes"),
+            "DOCX export must preserve Markdown image attributes through Pandoc"
+        );
     }
 
     #[test]

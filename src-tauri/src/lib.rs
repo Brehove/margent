@@ -15,6 +15,24 @@ const MENU_EXPORT_GDOC: &str = "margent.export-gdoc";
 const MENU_EXPORT_HTML: &str = "margent.export-html";
 const MENU_EXPORT_PDF: &str = "margent.export-pdf";
 const MENU_FIND: &str = "margent.find";
+const MENU_FORMAT_BLOCKQUOTE: &str = "margent.format-blockquote";
+const MENU_FORMAT_BOLD: &str = "margent.format-bold";
+const MENU_FORMAT_BULLET_LIST: &str = "margent.format-bullet-list";
+const MENU_FORMAT_CODE_BLOCK: &str = "margent.format-code-block";
+const MENU_FORMAT_HEADING_1: &str = "margent.format-heading-1";
+const MENU_FORMAT_HEADING_2: &str = "margent.format-heading-2";
+const MENU_FORMAT_HEADING_3: &str = "margent.format-heading-3";
+const MENU_FORMAT_HEADING_4: &str = "margent.format-heading-4";
+const MENU_FORMAT_HORIZONTAL_RULE: &str = "margent.format-horizontal-rule";
+const MENU_FORMAT_INLINE_CODE: &str = "margent.format-inline-code";
+const MENU_FORMAT_ITALIC: &str = "margent.format-italic";
+const MENU_FORMAT_ORDERED_LIST: &str = "margent.format-ordered-list";
+const MENU_FORMAT_PARAGRAPH: &str = "margent.format-paragraph";
+const MENU_FORMAT_STRIKETHROUGH: &str = "margent.format-strikethrough";
+const MENU_FORMAT_TASK_LIST: &str = "margent.format-task-list";
+const MENU_INSERT_FOOTNOTE: &str = "margent.insert-footnote";
+const MENU_INSERT_IMAGE: &str = "margent.insert-image";
+const MENU_INSERT_TABLE: &str = "margent.insert-table";
 const MENU_NEW_FILE: &str = "margent.new-file";
 const MENU_OPEN_FILE: &str = "margent.open-file";
 const MENU_OPEN_RECENT: &str = "margent.open-recent";
@@ -30,6 +48,9 @@ const MENU_REVIEW_BRIEF: &str = "margent.review-brief";
 const MENU_SAVE: &str = "margent.save";
 const MENU_TOGGLE_FOCUS_MODE: &str = "margent.toggle-focus-mode";
 const MENU_TOGGLE_FILES: &str = "margent.toggle-files";
+const MENU_ZOOM_ACTUAL_SIZE: &str = "margent.zoom-actual-size";
+const MENU_ZOOM_IN: &str = "margent.zoom-in";
+const MENU_ZOOM_OUT: &str = "margent.zoom-out";
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -88,6 +109,7 @@ pub fn run() {
             commands::workspace::save_document,
             commands::workspace::save_document_if_current,
             commands::workspace::import_asset,
+            commands::workspace::import_asset_from_path,
             commands::workspace::take_pending_open_requests,
             commands::export::export_document,
             commands::search::search_workspace,
@@ -192,6 +214,53 @@ fn build_app_menu<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> tauri::Result
     let find = MenuItemBuilder::with_id(MENU_FIND, "Find")
         .accelerator("CmdOrCtrl+F")
         .build(app)?;
+    let format_bold = MenuItemBuilder::with_id(MENU_FORMAT_BOLD, "Bold")
+        .accelerator("CmdOrCtrl+B")
+        .build(app)?;
+    let format_italic = MenuItemBuilder::with_id(MENU_FORMAT_ITALIC, "Italic")
+        .accelerator("CmdOrCtrl+I")
+        .build(app)?;
+    let format_strikethrough = MenuItemBuilder::with_id(MENU_FORMAT_STRIKETHROUGH, "Strikethrough")
+        .accelerator("CmdOrCtrl+Shift+X")
+        .build(app)?;
+    let format_inline_code = MenuItemBuilder::with_id(MENU_FORMAT_INLINE_CODE, "Inline Code")
+        .accelerator("CmdOrCtrl+E")
+        .build(app)?;
+    let format_heading_1 = MenuItemBuilder::with_id(MENU_FORMAT_HEADING_1, "Heading 1")
+        .accelerator("CmdOrCtrl+Alt+1")
+        .build(app)?;
+    let format_heading_2 = MenuItemBuilder::with_id(MENU_FORMAT_HEADING_2, "Heading 2")
+        .accelerator("CmdOrCtrl+Alt+2")
+        .build(app)?;
+    let format_heading_3 = MenuItemBuilder::with_id(MENU_FORMAT_HEADING_3, "Heading 3")
+        .accelerator("CmdOrCtrl+Alt+3")
+        .build(app)?;
+    let format_heading_4 = MenuItemBuilder::with_id(MENU_FORMAT_HEADING_4, "Heading 4")
+        .accelerator("CmdOrCtrl+Alt+4")
+        .build(app)?;
+    let format_paragraph = MenuItemBuilder::with_id(MENU_FORMAT_PARAGRAPH, "Paragraph")
+        .accelerator("CmdOrCtrl+Alt+0")
+        .build(app)?;
+    let format_bullet_list = MenuItemBuilder::with_id(MENU_FORMAT_BULLET_LIST, "Bullet List")
+        .accelerator("CmdOrCtrl+Shift+8")
+        .build(app)?;
+    let format_ordered_list = MenuItemBuilder::with_id(MENU_FORMAT_ORDERED_LIST, "Ordered List")
+        .accelerator("CmdOrCtrl+Shift+7")
+        .build(app)?;
+    let format_task_list = MenuItemBuilder::with_id(MENU_FORMAT_TASK_LIST, "Task List")
+        .accelerator("CmdOrCtrl+Shift+9")
+        .build(app)?;
+    let format_blockquote = MenuItemBuilder::with_id(MENU_FORMAT_BLOCKQUOTE, "Blockquote")
+        .accelerator("CmdOrCtrl+Shift+.")
+        .build(app)?;
+    let format_code_block = MenuItemBuilder::with_id(MENU_FORMAT_CODE_BLOCK, "Code Block")
+        .accelerator("CmdOrCtrl+Alt+C")
+        .build(app)?;
+    let format_horizontal_rule =
+        MenuItemBuilder::with_id(MENU_FORMAT_HORIZONTAL_RULE, "Horizontal Rule").build(app)?;
+    let insert_footnote = MenuItemBuilder::with_id(MENU_INSERT_FOOTNOTE, "Footnote").build(app)?;
+    let insert_table = MenuItemBuilder::with_id(MENU_INSERT_TABLE, "Table").build(app)?;
+    let insert_image = MenuItemBuilder::with_id(MENU_INSERT_IMAGE, "Image").build(app)?;
     let project_search = MenuItemBuilder::with_id(MENU_PROJECT_SEARCH, "Find in Workspace")
         .accelerator("CmdOrCtrl+Shift+F")
         .build(app)?;
@@ -208,6 +277,15 @@ fn build_app_menu<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> tauri::Result
         MenuItemBuilder::with_id(MENU_TOGGLE_FILES, "Toggle File Pane").build(app)?;
     let toggle_focus_mode =
         MenuItemBuilder::with_id(MENU_TOGGLE_FOCUS_MODE, "Focus Mode").build(app)?;
+    let zoom_in = MenuItemBuilder::with_id(MENU_ZOOM_IN, "Zoom In")
+        .accelerator("CmdOrCtrl+=")
+        .build(app)?;
+    let zoom_out = MenuItemBuilder::with_id(MENU_ZOOM_OUT, "Zoom Out")
+        .accelerator("CmdOrCtrl+-")
+        .build(app)?;
+    let zoom_actual_size = MenuItemBuilder::with_id(MENU_ZOOM_ACTUAL_SIZE, "Actual Size")
+        .accelerator("CmdOrCtrl+0")
+        .build(app)?;
     let providers = MenuItemBuilder::with_id(MENU_PROVIDERS, "Providers").build(app)?;
     let review_brief = MenuItemBuilder::with_id(MENU_REVIEW_BRIEF, "Review Brief").build(app)?;
     let check_for_updates =
@@ -257,6 +335,29 @@ fn build_app_menu<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> tauri::Result
         .item(&find)
         .item(&project_search)
         .build()?;
+    let format_menu = SubmenuBuilder::new(app, "Format")
+        .item(&format_bold)
+        .item(&format_italic)
+        .item(&format_strikethrough)
+        .item(&format_inline_code)
+        .separator()
+        .item(&format_heading_1)
+        .item(&format_heading_2)
+        .item(&format_heading_3)
+        .item(&format_heading_4)
+        .item(&format_paragraph)
+        .separator()
+        .item(&format_bullet_list)
+        .item(&format_ordered_list)
+        .item(&format_task_list)
+        .item(&format_blockquote)
+        .separator()
+        .item(&format_code_block)
+        .item(&format_horizontal_rule)
+        .item(&insert_footnote)
+        .item(&insert_table)
+        .item(&insert_image)
+        .build()?;
     let view_menu = SubmenuBuilder::new(app, "View")
         .item(&command_palette)
         .separator()
@@ -267,6 +368,10 @@ fn build_app_menu<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> tauri::Result
         .item(&raw_mode)
         .item(&toggle_focus_mode)
         .separator()
+        .item(&zoom_in)
+        .item(&zoom_out)
+        .item(&zoom_actual_size)
+        .separator()
         .item(&toggle_files)
         .fullscreen()
         .build()?;
@@ -276,6 +381,7 @@ fn build_app_menu<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> tauri::Result
         .item(&app_menu)
         .item(&file_menu)
         .item(&edit_menu)
+        .item(&format_menu)
         .item(&view_menu)
         .item(&window_menu)
         .build()

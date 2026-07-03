@@ -715,6 +715,42 @@ pub fn import_asset(
     })
 }
 
+pub fn import_asset_from_path(
+    workspace_root: &str,
+    source_path: &str,
+) -> Result<AssetImportResult, String> {
+    let source = Path::new(source_path);
+    let canonical_source = source
+        .canonicalize()
+        .map_err(|error| format!("Unable to resolve image file {}: {error}", source.display()))?;
+    let metadata = fs::metadata(&canonical_source).map_err(|error| {
+        format!(
+            "Unable to inspect image file {}: {error}",
+            canonical_source.display()
+        )
+    })?;
+    if !metadata.is_file() {
+        return Err(format!("{} is not a file.", canonical_source.display()));
+    }
+
+    if should_convert_asset_extension(&canonical_source) {
+        return import_converted_asset_from_path(workspace_root, &canonical_source);
+    }
+
+    let suggested_name = canonical_source
+        .file_name()
+        .and_then(|value| value.to_str())
+        .unwrap_or("image.png");
+    let bytes = fs::read(&canonical_source).map_err(|error| {
+        format!(
+            "Unable to read image file {}: {error}",
+            canonical_source.display()
+        )
+    })?;
+
+    import_asset(workspace_root, suggested_name, bytes)
+}
+
 fn read_document_content_and_version(path: &Path) -> Result<(String, DocumentVersion), String> {
     let content = fs::read_to_string(path)
         .map_err(|error| format!("Unable to read {}: {error}", path.display()))?;
@@ -800,7 +836,86 @@ fn sanitize_asset_file_name(suggested_name: &str) -> String {
 }
 
 fn is_supported_asset_extension(extension: &str) -> bool {
-    matches!(extension, "png" | "jpg" | "jpeg" | "gif" | "webp" | "avif")
+    matches!(
+        extension,
+        "png" | "jpg" | "jpeg" | "gif" | "webp" | "avif" | "svg"
+    )
+}
+
+fn should_convert_asset_extension(path: &Path) -> bool {
+    path.extension()
+        .and_then(|value| value.to_str())
+        .map(|extension| {
+            matches!(
+                extension.to_ascii_lowercase().as_str(),
+                "heic" | "heif" | "tif" | "tiff" | "bmp"
+            )
+        })
+        .unwrap_or(false)
+}
+
+fn import_converted_asset_from_path(
+    workspace_root: &str,
+    source_path: &Path,
+) -> Result<AssetImportResult, String> {
+    let root_path = Path::new(workspace_root);
+    let canonical_root = root_path.canonicalize().map_err(|error| {
+        format!(
+            "Unable to resolve workspace root {}: {error}",
+            root_path.display()
+        )
+    })?;
+    let assets_dir = canonical_root.join("assets");
+    fs::create_dir_all(&assets_dir)
+        .map_err(|error| format!("Unable to create {}: {error}", assets_dir.display()))?;
+
+    let stem = source_path
+        .file_stem()
+        .and_then(|value| value.to_str())
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or("image");
+    let asset_name = sanitize_asset_file_name(&format!("{stem}.jpg"));
+    let asset_path = next_available_asset_path(&assets_dir, &asset_name)?;
+    let output = Command::new("sips")
+        .args(["-s", "format", "jpeg"])
+        .arg(source_path)
+        .arg("--out")
+        .arg(&asset_path)
+        .output()
+        .map_err(|error| {
+            format!(
+                "Unable to convert {} with sips: {error}",
+                source_path.display()
+            )
+        })?;
+
+    if !output.status.success() {
+        let _ = fs::remove_file(&asset_path);
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        return Err(if stderr.is_empty() {
+            format!("Unable to convert {} to JPEG.", source_path.display())
+        } else {
+            format!(
+                "Unable to convert {} to JPEG: {stderr}",
+                source_path.display()
+            )
+        });
+    }
+
+    let relative_path = file_service::relative_path_string(&canonical_root, &asset_path)?;
+    thread_service::append_event(
+        &canonical_root,
+        "asset.imported",
+        None,
+        None,
+        None,
+        Some(&relative_path),
+    )?;
+
+    Ok(AssetImportResult {
+        absolute_path: asset_path.to_string_lossy().to_string(),
+        relative_path,
+    })
 }
 
 fn next_available_asset_path(assets_dir: &Path, asset_name: &str) -> Result<PathBuf, String> {
@@ -1668,6 +1783,36 @@ mod tests {
         );
 
         fs::remove_dir_all(&workspace_root).expect("cleanup temp workspace");
+    }
+
+    #[test]
+    fn import_asset_from_path_copies_and_sanitizes_file() {
+        let workspace_root = unique_temp_dir("margent-import-asset-from-path");
+        let source_dir = unique_temp_dir("margent-import-asset-source");
+        fs::create_dir_all(&workspace_root).expect("create temp workspace");
+        fs::create_dir_all(&source_dir).expect("create source dir");
+        let source_path = source_dir.join("Sketch File.svg");
+        fs::write(&source_path, "<svg></svg>").expect("write source image");
+
+        let imported = import_asset_from_path(
+            workspace_root.to_str().expect("root str"),
+            source_path.to_str().expect("source str"),
+        )
+        .expect("import asset from path");
+
+        assert_eq!(imported.relative_path, "assets/Sketch-File.svg");
+        assert_eq!(
+            fs::read_to_string(workspace_root.join(&imported.relative_path))
+                .expect("read imported asset"),
+            "<svg></svg>"
+        );
+        assert_eq!(
+            fs::read_to_string(&source_path).expect("read source asset"),
+            "<svg></svg>"
+        );
+
+        fs::remove_dir_all(&workspace_root).expect("cleanup temp workspace");
+        fs::remove_dir_all(&source_dir).expect("cleanup source dir");
     }
 
     #[test]
