@@ -1,0 +1,47 @@
+{
+  "doc.toString large plain": {
+    "medianMs": 0.006
+  },
+  "buildThreadPresentation many-thread": {
+    "medianMs": 0.055
+  },
+  "buildThreadPresentation footnote-heavy": {
+    "medianMs": 0.077
+  },
+  "mapThreadPresentation cumulative edits": {
+    "medianMs": 0.261
+  },
+  "resolveThreadAnchors footnote-heavy": {
+    "medianMs": 0.028
+  },
+  "buildReadableMarkdownDecorations large plain": {
+    "medianMs": 0.074
+  },
+  "buildReadableMarkdownDecorations many-thread": {
+    "medianMs": 0.029
+  },
+  "buildReadableMarkdownDecorations footnote-heavy": {
+    "medianMs": 0.032
+  },
+  "buildRenderedMarkdownDecorations large plain": {
+    "medianMs": 1.03
+  },
+  "buildRenderedMarkdownDecorations many-thread": {
+    "medianMs": 0.377
+  },
+  "buildRenderedMarkdownDecorations footnote-heavy": {
+    "medianMs": 0.732
+  },
+  "buildRenderedMarkdownDecorations many-tables": {
+    "medianMs": 1.054
+  },
+  "buildRenderedMarkdownDecorations giant-table": {
+    "medianMs": 1.05
+  },
+  "buildProposalReviewDecorations 100 hunks": {
+    "medianMs": 0.024
+  },
+  "buildProposalReviewDecorations 500 hunks": {
+    "medianMs": 0.12
+  }
+}

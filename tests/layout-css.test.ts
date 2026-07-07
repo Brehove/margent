@@ -4,6 +4,10 @@ import { describe, expect, it } from "vitest";
 
 const APP_CSS = readFileSync(join(process.cwd(), "src", "App.css"), "utf8");
 const TOKENS_CSS = readFileSync(join(process.cwd(), "src", "tokens.css"), "utf8");
+const USE_CODE_MIRROR_TS = readFileSync(
+  join(process.cwd(), "src", "components", "editor", "useCodeMirror.ts"),
+  "utf8",
+);
 
 type CssRule = {
   selectors: string[];
@@ -329,6 +333,41 @@ describe("Clerk-ledger visual system CSS", () => {
     expect(lastCssRule(".primary-button")).toContain("color: var(--ledger-control-on-accent)");
     expect(lastCssRule(".seg button.on")).toContain("color: var(--ledger-control-on-accent)");
     expect(lastCssRule(".thread-message--assistant")).toContain("background: var(--ledger-control-bg)");
+  });
+
+  it("keeps the new editor chrome color surface tokenized", () => {
+    expect(lastCssRule(".format-button:hover:not(:disabled)")).toContain(
+      "background: var(--format-button-hover-bg)",
+    );
+    expect(lastCssRule(".format-button:hover:not(:disabled)")).not.toMatch(/#[0-9a-f]{3,8}|rgba?\(/i);
+    expect(lastCssRule(".format-button.is-active")).toContain(
+      "background: var(--format-button-active-bg)",
+    );
+
+    const codeMirrorChrome = USE_CODE_MIRROR_TS.slice(
+      USE_CODE_MIRROR_TS.indexOf('".cm-md-table-block"'),
+      USE_CODE_MIRROR_TS.indexOf('"&.cm-rendered-mode .cm-gutters"'),
+    );
+    expect(codeMirrorChrome).toContain("var(--editor-table-header-bg)");
+    expect(codeMirrorChrome).toContain("var(--proposal-delete-bg)");
+    expect(codeMirrorChrome).toContain("var(--proposal-insert-bg)");
+    expect(codeMirrorChrome).not.toMatch(/#[0-9a-f]{3,8}|rgba?\(\s*\d/gi);
+  });
+
+  it("keeps rendered Markdown tables horizontally scrollable for long cells", () => {
+    const codeMirrorChrome = USE_CODE_MIRROR_TS.slice(
+      USE_CODE_MIRROR_TS.indexOf('".cm-md-table-block"'),
+      USE_CODE_MIRROR_TS.indexOf('"&.cm-rendered-mode .cm-gutters"'),
+    );
+
+    expect(codeMirrorChrome).toContain('".cm-md-table-scroll"');
+    expect(codeMirrorChrome).toContain('".cm-md-table-column-resize-handle"');
+    expect(codeMirrorChrome).toContain('overflow: "auto"');
+    expect(codeMirrorChrome).toContain('width: "max-content"');
+    expect(codeMirrorChrome).toContain('tableLayout: "fixed"');
+    expect(codeMirrorChrome).toContain('whiteSpace: "nowrap"');
+    expect(USE_CODE_MIRROR_TS).toContain("MARKDOWN_TABLE_MAX_DEFAULT_COLUMN_WIDTH_PX");
+    expect(USE_CODE_MIRROR_TS).toContain("function createMarkdownTableColumnResizeHandle");
   });
 
   it("keeps system dark mode on the Clerk ledger palette", () => {

@@ -103,6 +103,46 @@ export function createFootnoteHeavyScenario(noteCount = 120): PerfScenario {
   };
 }
 
+export function createManyTablesDocument(tableCount = 30, rowsPerTable = 20) {
+  const blocks: string[] = [];
+  for (let tableIndex = 0; tableIndex < tableCount; tableIndex += 1) {
+    blocks.push(`## Table ${tableIndex + 1}`);
+    blocks.push(
+      [
+        "| Label | Status | Notes |",
+        "| --- | :---: | --- |",
+        ...Array.from({ length: rowsPerTable }, (_value, rowIndex) => {
+          const item = `${tableIndex + 1}.${rowIndex + 1}`;
+          return `| Item ${item} | ${rowIndex % 2 === 0 ? "Open" : "Done"} | Keeps table parsing and rendered widgets in the hot path. |`;
+        }),
+      ].join("\n"),
+    );
+    blocks.push(
+      `Paragraph ${tableIndex + 1} between tables keeps viewport collection honest and prevents one giant contiguous table block.`,
+    );
+  }
+
+  return blocks.join("\n\n");
+}
+
+export function createGiantTableDocument(rowCount = 200, columnCount = 10) {
+  const headers = Array.from({ length: columnCount }, (_value, index) => `Column ${index + 1}`);
+  const divider = Array.from({ length: columnCount }, (_value, index) =>
+    index % 3 === 1 ? ":---:" : "---",
+  );
+  const rows = Array.from({ length: rowCount }, (_value, rowIndex) =>
+    Array.from(
+      { length: columnCount },
+      (_cell, columnIndex) => `R${rowIndex + 1}C${columnIndex + 1}`,
+    ),
+  );
+  const serializeRow = (row: string[]) => `| ${row.join(" | ")} |`;
+
+  return ["# Giant Table", "", serializeRow(headers), serializeRow(divider), ...rows.map(serializeRow)].join(
+    "\n",
+  );
+}
+
 function makeThread(content: string, spec: ThreadSpec): ThreadRecord {
   return {
     schemaVersion: 5,

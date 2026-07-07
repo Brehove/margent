@@ -12,21 +12,45 @@ interface ProjectSearchViewProps {
   workspaceRoot: string;
 }
 
+interface ProjectSearchCacheEntry {
+  caseSensitive: boolean;
+  mode: ProjectSearchMode;
+  query: string;
+  response: ProjectSearchResponse | null;
+}
+
+const searchStateCache = new Map<string, ProjectSearchCacheEntry>();
+
 export const ProjectSearchView = memo(function ProjectSearchView({
   onOpenResult,
   workspaceRoot,
 }: ProjectSearchViewProps) {
   const inputRef = useRef<HTMLInputElement | null>(null);
-  const [caseSensitive, setCaseSensitive] = useState(false);
+  const initialState = searchStateCache.get(workspaceRoot) ?? {
+    caseSensitive: false,
+    mode: "literal" satisfies ProjectSearchMode,
+    query: "",
+    response: null,
+  };
+  const [caseSensitive, setCaseSensitive] = useState(initialState.caseSensitive);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
-  const [mode, setMode] = useState<ProjectSearchMode>("literal");
-  const [query, setQuery] = useState("");
-  const [response, setResponse] = useState<ProjectSearchResponse | null>(null);
+  const [mode, setMode] = useState<ProjectSearchMode>(initialState.mode);
+  const [query, setQuery] = useState(initialState.query);
+  const [response, setResponse] = useState<ProjectSearchResponse | null>(initialState.response);
 
   useEffect(() => {
     inputRef.current?.focus();
   }, []);
+
+  useEffect(() => {
+    searchStateCache.set(workspaceRoot, {
+      caseSensitive,
+      mode,
+      query,
+      response,
+    });
+  }, [caseSensitive, mode, query, response, workspaceRoot]);
 
   const runSearch = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();

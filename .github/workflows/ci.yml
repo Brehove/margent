@@ -43,6 +43,9 @@ jobs:
       - name: Run frontend tests
         run: npm test
 
+      - name: Run frontend perf gate
+        run: MARGENT_PERF_GATE=1 npm run perf:report
+
       - name: Check Rust formatting
         run: cargo fmt --all --check
 

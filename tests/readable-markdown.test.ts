@@ -3,6 +3,7 @@ import { defaultKeymap } from "@codemirror/commands";
 import { EditorState, Prec } from "@codemirror/state";
 import { EditorView, keymap, runScopeHandlers } from "@codemirror/view";
 import { markdown } from "@codemirror/lang-markdown";
+import { Table } from "@lezer/markdown";
 import {
   buildMarkdownFootnoteDefinitionReplacement,
   buildMarkdownImageBlockInsertion,
@@ -12,6 +13,7 @@ import {
   buildRenderedMarkdownDecorations,
   classifyReadableMarkdownLine,
   convertClipboardHtmlToMarkdown,
+  convertTabularPlainTextToMarkdown,
   editorCompositionStateField,
   importImageFileAtSelection,
   pendingImageInsertionRangeField,
@@ -25,6 +27,8 @@ function getWidgetName(widget: unknown) {
     ? (widget as { constructor: { name: string } }).constructor.name
     : "";
 }
+
+const markdownWithTables = markdown({ extensions: [Table] });
 
 describe("classifyReadableMarkdownLine", () => {
   it("classifies headings by level", () => {
@@ -1005,7 +1009,7 @@ describe("buildRenderedMarkdownDecorations", () => {
     const doc = `${tableDoc}\n\nTrailing`;
     const state = EditorState.create({
       doc,
-      extensions: [markdown()],
+      extensions: [markdownWithTables],
       selection: { anchor: 0 },
     });
 
@@ -1041,7 +1045,7 @@ describe("buildRenderedMarkdownDecorations", () => {
     ].join("\n");
     const state = EditorState.create({
       doc,
-      extensions: [markdown()],
+      extensions: [markdownWithTables],
       selection: { anchor: doc.indexOf("Trailing") },
     });
 
@@ -1069,7 +1073,7 @@ describe("buildRenderedMarkdownDecorations", () => {
       parent: host,
       state: EditorState.create({
         doc,
-        extensions: [markdown()],
+        extensions: [markdownWithTables],
       }),
     });
     const decorations = buildRenderedMarkdownDecorations(
@@ -1108,7 +1112,7 @@ describe("buildRenderedMarkdownDecorations", () => {
     ].join("\n");
     const state = EditorState.create({
       doc,
-      extensions: [markdown()],
+      extensions: [markdownWithTables],
       selection: { anchor: doc.indexOf("Outro") },
     });
 
@@ -1149,7 +1153,7 @@ describe("buildRenderedMarkdownDecorations", () => {
     ].join("\n");
     const state = EditorState.create({
       doc,
-      extensions: [markdown()],
+      extensions: [markdownWithTables],
       selection: { anchor: doc.indexOf("Source-Grounded") },
     });
 
@@ -1961,6 +1965,18 @@ describe("convertClipboardHtmlToMarkdown", () => {
   it("falls back to plain text when the HTML payload has no usable content", async () => {
     await expect(convertClipboardHtmlToMarkdown("<br>", "fallback text")).resolves.toBe(
       "fallback text",
+    );
+  });
+
+  it("converts HTML and TSV tables into Markdown tables", async () => {
+    await expect(
+      convertClipboardHtmlToMarkdown(
+        "<table><thead><tr><th>Name</th><th>Status</th></tr></thead><tbody><tr><td>Ada</td><td>Done</td></tr></tbody></table>",
+      ),
+    ).resolves.toBe("| Name | Status |\n| --- | --- |\n| Ada | Done |");
+
+    expect(convertTabularPlainTextToMarkdown("Name\tStatus\nAda\tDone")).toBe(
+      "| Name | Status |\n| --- | --- |\n| Ada | Done |",
     );
   });
 });

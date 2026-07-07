@@ -51,7 +51,7 @@ export const FormattingToolbar = memo(function FormattingToolbar({
           isPressed={context.bold}
           label="B"
           onCommand={onCommand}
-          title="Bold"
+          title="Bold (Cmd+B)"
         />
         <FormatButton
           command="italic"
@@ -59,7 +59,7 @@ export const FormattingToolbar = memo(function FormattingToolbar({
           isPressed={context.italic}
           label="I"
           onCommand={onCommand}
-          title="Italic"
+          title="Italic (Cmd+I)"
         />
         <FormatButton
           command="strikethrough"
@@ -160,10 +160,10 @@ export const FormattingToolbar = memo(function FormattingToolbar({
         />
         <FormatButton
           command="table"
-          disabled={disabled || context.inCodeBlock || context.inFrontmatter}
+          disabled={disabled || context.inCodeBlock || context.inFrontmatter || context.inTable}
           label="Table"
           onCommand={onCommand}
-          title="Table"
+          title={context.inTable ? "Already in a table" : "Insert table"}
         />
       </div>
 
@@ -200,87 +200,89 @@ export const FormattingToolbar = memo(function FormattingToolbar({
         </button>
       </div>
 
-      {context.inTable ? (
-        <div className="format-group table-format-group" aria-label="Table editing">
+      <div
+        className={`format-group table-format-group${context.inTable ? "" : " is-inactive"}`}
+        aria-hidden={!context.inTable}
+        aria-label="Table editing"
+      >
           <TableButton
             command="row-above"
-            disabled={disabled}
-            label="Row +"
+            disabled={disabled || !context.inTable}
+            label="+ Row Above"
             onCommand={onTableCommand}
             title="Insert row above"
           />
           <TableButton
             command="row-below"
-            disabled={disabled}
-            label="+ Row"
+            disabled={disabled || !context.inTable}
+            label="+ Row Below"
             onCommand={onTableCommand}
             title="Insert row below"
           />
           <TableButton
             command="column-left"
-            disabled={disabled}
-            label="Col +"
+            disabled={disabled || !context.inTable}
+            label="+ Col Left"
             onCommand={onTableCommand}
             title="Insert column left"
           />
           <TableButton
             command="column-right"
-            disabled={disabled}
-            label="+ Col"
+            disabled={disabled || !context.inTable}
+            label="+ Col Right"
             onCommand={onTableCommand}
             title="Insert column right"
           />
           <TableButton
             command="delete-row"
-            disabled={disabled}
-            label="Del Row"
+            disabled={disabled || !context.inTable}
+            label="Delete Row"
             onCommand={onTableCommand}
             title="Delete row"
           />
           <TableButton
             command="delete-column"
-            disabled={disabled}
-            label="Del Col"
+            disabled={disabled || !context.inTable}
+            label="Delete Col"
             onCommand={onTableCommand}
             title="Delete column"
           />
           <TableButton
             command="align-left"
-            disabled={disabled}
+            disabled={disabled || !context.inTable}
             label="Left"
             onCommand={onTableCommand}
             title="Align column left"
           />
           <TableButton
             command="align-center"
-            disabled={disabled}
+            disabled={disabled || !context.inTable}
             label="Center"
             onCommand={onTableCommand}
             title="Align column center"
           />
           <TableButton
             command="align-right"
-            disabled={disabled}
+            disabled={disabled || !context.inTable}
             label="Right"
             onCommand={onTableCommand}
             title="Align column right"
           />
           <TableButton
             command="align-none"
-            disabled={disabled}
+            disabled={disabled || !context.inTable}
             label="Align Off"
             onCommand={onTableCommand}
             title="Clear column alignment"
           />
           <TableButton
             command="tidy"
-            disabled={disabled}
+            disabled={disabled || !context.inTable}
             label="Tidy"
             onCommand={onTableCommand}
             title="Tidy table source"
           />
-        </div>
-      ) : null}
+      </div>
     </div>
   );
 });

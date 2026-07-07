@@ -280,6 +280,7 @@ pub fn render_standalone_html(
     });
     let mut body = String::new();
     html::push_html(&mut body, parser);
+    let body = wrap_html_tables(&body);
 
     format!(
         r#"<!doctype html>
@@ -317,7 +318,8 @@ h1, h2, h3, h4, h5, h6 {{
 h1 {{ font-size: 2.25rem; }}
 h2 {{ font-size: 1.65rem; border-bottom: 1px solid var(--margent-rule); padding-bottom: 0.2em; }}
 h3 {{ font-size: 1.25rem; }}
-p, ul, ol, blockquote, pre, table {{ margin: 0 0 1.05em; }}
+p, ul, ol, blockquote, pre {{ margin: 0 0 1.05em; }}
+.margent-table-scroll {{ max-width: 100%; margin: 0 0 1.05em; overflow-x: auto; }}
 a {{ color: var(--margent-link); }}
 blockquote {{
   border-left: 3px solid var(--margent-rule);
@@ -351,6 +353,56 @@ hr {{ border: 0; border-top: 1px solid var(--margent-rule); margin: 2em 0; }}
 "#,
         escape_html_text(&title),
         body
+    )
+}
+
+fn wrap_html_tables(html_body: &str) -> String {
+    let mut wrapped = String::with_capacity(html_body.len());
+    let mut cursor = 0;
+
+    while let Some(relative_tag_start) = html_body[cursor..].find('<') {
+        let tag_start = cursor + relative_tag_start;
+        wrapped.push_str(&html_body[cursor..tag_start]);
+        let remaining = &html_body[tag_start..];
+
+        if is_table_open_tag(remaining) {
+            wrapped.push_str(r#"<div class="margent-table-scroll">"#);
+        }
+
+        if is_table_close_tag(remaining) {
+            if let Some(relative_tag_end) = remaining.find('>') {
+                let tag_end = tag_start + relative_tag_end + 1;
+                wrapped.push_str(&html_body[tag_start..tag_end]);
+                wrapped.push_str("</div>");
+                cursor = tag_end;
+                continue;
+            }
+        }
+
+        wrapped.push('<');
+        cursor = tag_start + 1;
+    }
+
+    wrapped.push_str(&html_body[cursor..]);
+    wrapped
+}
+
+fn is_table_open_tag(value: &str) -> bool {
+    is_table_tag(value, "<table")
+}
+
+fn is_table_close_tag(value: &str) -> bool {
+    is_table_tag(value, "</table")
+}
+
+fn is_table_tag(value: &str, prefix: &str) -> bool {
+    if value.len() < prefix.len() || !value[..prefix.len()].eq_ignore_ascii_case(prefix) {
+        return false;
+    }
+
+    matches!(
+        value.as_bytes().get(prefix.len()),
+        Some(b'>') | Some(b' ') | Some(b'\t') | Some(b'\n') | Some(b'\r')
     )
 }
 
@@ -883,8 +935,22 @@ mod tests {
         assert!(html.contains("<title>Visible &amp; Title</title>"));
         assert!(html.contains("<h1>Visible &amp; Title</h1>"));
         assert!(html.contains("<strong>world</strong>"));
+        assert!(html.contains(r#"<div class="margent-table-scroll"><table>"#));
         assert!(html.contains("<table>"));
         assert!(!html.contains("title: Hidden"));
+    }
+
+    #[test]
+    fn html_export_wraps_raw_tables_with_attributes() {
+        let doc = document("draft.md");
+        let html = render_standalone_html(
+            &doc,
+            r#"<table class="wide"><tr><td>A</td></tr></table>"#,
+            None,
+        );
+
+        assert!(html.contains(r#"<div class="margent-table-scroll"><table class="wide">"#));
+        assert!(html.contains("</table></div>"));
     }
 
     #[test]

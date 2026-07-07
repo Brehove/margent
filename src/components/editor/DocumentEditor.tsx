@@ -12,6 +12,7 @@ import {
   useCallback,
   useEffect,
   useLayoutEffect,
+  useMemo,
   useRef,
   useState,
 } from "react";
@@ -32,6 +33,10 @@ import {
 import { convertLocalFileSrc, isDesktopBackend, openBackend } from "../../lib/backend";
 import { getErrorMessage } from "../../lib/errorMessage";
 import { measurePerf } from "../../lib/devPerf";
+import {
+  registerActiveEditorFlushProvider,
+  type ActiveEditorFlushResult,
+} from "../../lib/activeEditorFlush";
 import {
   COMMENT_DOCK_MAX_WIDTH,
   COMMENT_DOCK_MIN_WIDTH,
@@ -126,7 +131,7 @@ interface DocumentEditorProps {
     instruction: string,
     passName: string | null,
   ) => Promise<void>;
-  onSave: (content: string) => void;
+  onSave: (content: string) => Promise<ActiveEditorFlushResult>;
   onThreadSelect: (threadId: string | null) => void;
   providerActionState: ProviderActionState;
   providerDocumentActionState: ProviderDocumentActionState;
@@ -391,7 +396,6 @@ export const DocumentEditor = memo(function DocumentEditor({
 
     createAnchorRectRef.current = rect;
     setCreateSelection(selection);
-    onThreadSelect(null);
   }
 
   function handleCreateLinkRequested(selection: EditorSelectionSnapshot) {
@@ -417,21 +421,43 @@ export const DocumentEditor = memo(function DocumentEditor({
   const activeThread =
     threadDetail && threadDetail.id === selectedThreadId ? threadDetail : selectedThreadSummary;
   const isActiveThreadExpanded = activeThread ? expandedThreadId === activeThread.id : false;
-  const activeThreadProposals = activeThread
-    ? proposals.filter(
-        (proposal) =>
-          proposal.threadIds.includes(activeThread.id) ||
-          activeThread.linkedProposalIds.includes(proposal.id),
-      )
-    : [];
-  const documentAgentThreads = threads.filter(isDocumentLevelThread);
-  const documentAgentThreadIds = new Set(documentAgentThreads.map((thread) => thread.id));
-  const documentAgentProposals = proposals.filter((proposal) =>
-    proposal.threadIds.some((threadId) => documentAgentThreadIds.has(threadId)),
+  const activeThreadProposals = useMemo(
+    () =>
+      activeThread
+        ? proposals.filter(
+            (proposal) =>
+              proposal.threadIds.includes(activeThread.id) ||
+              activeThread.linkedProposalIds.includes(proposal.id),
+          )
+        : [],
+    [activeThread, proposals],
   );
-  const currentDocumentProposals = document
-    ? proposals.filter((proposal) => proposal.documentId === document.id)
-    : [];
+  const documentAgentThreads = useMemo(
+    () => threads.filter(isDocumentLevelThread),
+    [threads],
+  );
+  const documentAgentThreadIds = useMemo(
+    () => new Set(documentAgentThreads.map((thread) => thread.id)),
+    [documentAgentThreads],
+  );
+  const documentAgentProposals = useMemo(
+    () =>
+      proposals.filter((proposal) =>
+        proposal.threadIds.some((threadId) => documentAgentThreadIds.has(threadId)),
+      ),
+    [documentAgentThreadIds, proposals],
+  );
+  const currentDocumentProposals = useMemo(
+    () => (document ? proposals.filter((proposal) => proposal.documentId === document.id) : []),
+    [document, proposals],
+  );
+  const openThreadCount = useMemo(
+    () => threads.filter((thread) => thread.status === "open").length,
+    [threads],
+  );
+  const handleDocumentAgentToggle = useCallback(() => {
+    setIsDocumentAgentExpanded((current) => !current);
+  }, []);
 
   const setThreadCardOffsetIfChanged = useCallback((nextOffset: number) => {
     setThreadCardOffset((currentOffset) =>
@@ -850,7 +876,7 @@ export const DocumentEditor = memo(function DocumentEditor({
   }, [onThreadSelect, selectedThreadSummary, selectedThreadId]);
 
   const handleSave = useCallback(() => {
-    onSave(session.getContent());
+    void onSave(session.getContent());
   }, [onSave, session]);
 
   const handleFind = useCallback(() => {
@@ -1037,7 +1063,7 @@ export const DocumentEditor = memo(function DocumentEditor({
         return;
       }
 
-      onSave(session.getContent());
+      void onSave(session.getContent());
     };
 
     const handleKeydown = (event: KeyboardEvent) => {
@@ -1110,13 +1136,21 @@ export const DocumentEditor = memo(function DocumentEditor({
         return;
       }
 
-      onSave(session.getContent());
+      void onSave(session.getContent());
     }, AUTOSAVE_IDLE_DELAY_MS);
 
     return () => {
       window.clearTimeout(autosaveTimeoutId);
     };
   }, [document?.id, isDirty, isSaving, onSave, session, sessionSnapshot.revision]);
+
+  useEffect(() => {
+    return registerActiveEditorFlushProvider({
+      flush: () => onSave(session.getContent()),
+      getContent: () => session.getContent(),
+      isDirty: () => session.isDirty(),
+    });
+  }, [onSave, session]);
 
   const commentDockWidthBounds = getCommentDockWidthBounds();
   const editorWorkbenchStyle = {
@@ -1342,7 +1376,7 @@ export const DocumentEditor = memo(function DocumentEditor({
         onZoomIn={zoomEditorIn}
         onZoomOut={zoomEditorOut}
         onSave={handleSave}
-        threadCount={threads.filter((thread) => thread.status === "open").length}
+        threadCount={openThreadCount}
         wordCount={wordCount}
       />
 
@@ -1440,7 +1474,7 @@ export const DocumentEditor = memo(function DocumentEditor({
           onCreateThread={handleCreateThread}
           onDocumentComment={handleDocumentComment}
           onDocumentAgentPromptChange={setDocumentAgentPrompt}
-          onDocumentAgentToggle={() => setIsDocumentAgentExpanded((current) => !current)}
+          onDocumentAgentToggle={handleDocumentAgentToggle}
           onNewCommentBodyChange={setNewCommentBody}
           onAcceptedHunksApplied={handleAcceptedHunksApplied}
           onOutlineHeadingSelect={session.scrollToLine}
@@ -1702,6 +1736,12 @@ const EditorSurface = memo(function EditorSurface({
                 aria-label="Link URL"
                 autoFocus={isCreatingLink}
                 onChange={(event) => onLinkEditorUrlChange(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === "Escape") {
+                    event.preventDefault();
+                    onCancelLinkCreate();
+                  }
+                }}
                 placeholder="Paste or type URL"
                 type="text"
                 value={linkEditorUrl}
@@ -2854,6 +2894,7 @@ const ProposalReviewCard = memo(function ProposalReviewCard({
   );
   const [changeSetResult, setChangeSetResult] = useState<ProposalChangeSetResult | null>(null);
   const [hunkReviewError, setHunkReviewError] = useState<string | null>(null);
+  const [hunkReviewStatus, setHunkReviewStatus] = useState<string | null>(null);
   const [isApplyingHunks, setIsApplyingHunks] = useState(false);
   const [isLoadingChangeSet, setIsLoadingChangeSet] = useState(false);
   const [activeHunkId, setActiveHunkId] = useState<string | null>(null);
@@ -2936,6 +2977,7 @@ const ProposalReviewCard = memo(function ProposalReviewCard({
 
     setIsLoadingChangeSet(true);
     setHunkReviewError(null);
+    setHunkReviewStatus(null);
 
     try {
       const result = await invokeBackend<ProposalChangeSetResult>("get_proposal_change_set", {
@@ -2973,6 +3015,7 @@ const ProposalReviewCard = memo(function ProposalReviewCard({
 
     setIsApplyingHunks(true);
     setHunkReviewError(null);
+    setHunkReviewStatus(null);
     const acceptedHunkLine = resolveAcceptedHunkRestoreLine(
       changeSetResult.changeSet.hunks,
       selectedHunkIds,
@@ -2999,7 +3042,7 @@ const ProposalReviewCard = memo(function ProposalReviewCard({
         setSelectedHunkIds([]);
         onInlineProposalReviewChange(proposal.id, null);
         if (result.result.message) {
-          setHunkReviewError(result.result.message);
+          setHunkReviewStatus(result.result.message);
         }
         return;
       }
@@ -3092,6 +3135,7 @@ const ProposalReviewCard = memo(function ProposalReviewCard({
         <ProposalHunkReview
           changeSetResult={changeSetResult}
           errorMessage={hunkReviewError}
+          statusMessage={hunkReviewStatus}
           isApplying={isApplyingHunks}
           isLoading={isLoadingChangeSet}
           activeHunkId={activeHunkId}
@@ -3147,6 +3191,7 @@ function ProposalHunkReview({
   activeHunkId,
   changeSetResult,
   errorMessage,
+  statusMessage,
   isApplying,
   isLoading,
   onApplySelected,
@@ -3162,6 +3207,7 @@ function ProposalHunkReview({
   activeHunkId: string | null;
   changeSetResult: ProposalChangeSetResult | null;
   errorMessage: string | null;
+  statusMessage: string | null;
   isApplying: boolean;
   isLoading: boolean;
   onApplySelected: () => void;
@@ -3201,6 +3247,7 @@ function ProposalHunkReview({
       </div>
 
       {errorMessage ? <p className="proposal-error-text">{errorMessage}</p> : null}
+      {statusMessage ? <p className="proposal-status-text">{statusMessage}</p> : null}
 
       {changeSetResult?.status === "stale" || changeSetResult?.status === "unsupported" ? (
         <p className="proposal-error-text">{changeSetResult.message}</p>

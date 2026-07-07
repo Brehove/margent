@@ -54,6 +54,7 @@ export const FileBrowser = memo(function FileBrowser({
   const [deleteCandidate, setDeleteCandidate] = useState<string | null>(null);
   const [draftAction, setDraftAction] = useState<DraftAction | null>(null);
   const draftInputRef = useRef<HTMLInputElement | null>(null);
+  const fileButtonRefs = useRef<Map<string, HTMLButtonElement>>(new Map());
   const draftActionFocusKey =
     draftAction?.kind === "rename"
       ? `rename:${draftAction.fromRelativePath}`
@@ -99,6 +100,57 @@ export const FileBrowser = memo(function FileBrowser({
     draftInputRef.current.focus();
     draftInputRef.current.select();
   }, [draftActionFocusKey]);
+
+  useEffect(() => {
+    if (!activeRelativePath) {
+      return;
+    }
+
+    const activeButton = fileButtonRefs.current.get(activeRelativePath);
+    if (typeof activeButton?.scrollIntoView === "function") {
+      activeButton.scrollIntoView({ block: "nearest" });
+    }
+  }, [activeRelativePath]);
+
+  const focusDocumentAt = (index: number) => {
+    const document = documents[index];
+    if (!document) {
+      return;
+    }
+    fileButtonRefs.current.get(document.relativePath)?.focus();
+  };
+
+  const handleFileListKeyDown = (event: React.KeyboardEvent<HTMLUListElement>) => {
+    if (
+      event.key !== "ArrowDown" &&
+      event.key !== "ArrowUp" &&
+      event.key !== "Home" &&
+      event.key !== "End"
+    ) {
+      return;
+    }
+
+    const currentIndex = documents.findIndex(
+      (summary) =>
+        fileButtonRefs.current.get(summary.relativePath) === globalThis.document.activeElement,
+    );
+    const fallbackIndex = Math.max(
+      0,
+      documents.findIndex((document) => document.relativePath === activeRelativePath),
+    );
+    const baseIndex = currentIndex === -1 ? fallbackIndex : currentIndex;
+    const nextIndex =
+      event.key === "Home"
+        ? 0
+        : event.key === "End"
+          ? documents.length - 1
+          : event.key === "ArrowDown"
+            ? Math.min(baseIndex + 1, documents.length - 1)
+            : Math.max(baseIndex - 1, 0);
+
+    event.preventDefault();
+    focusDocumentAt(nextIndex);
+  };
 
   if (isCollapsed) {
     return (
@@ -176,7 +228,7 @@ export const FileBrowser = memo(function FileBrowser({
       </header>
 
       {documents.length ? (
-        <ul className="file-list">
+        <ul className="file-list" onKeyDown={handleFileListKeyDown}>
           {documents.map((document) => (
             <li className="file-list-item" key={document.id}>
               <button
@@ -184,6 +236,13 @@ export const FileBrowser = memo(function FileBrowser({
                   document.relativePath === activeRelativePath ? "active" : ""
                 }`}
                 onClick={() => onSelectDocument(document.relativePath)}
+                ref={(node) => {
+                  if (node) {
+                    fileButtonRefs.current.set(document.relativePath, node);
+                  } else {
+                    fileButtonRefs.current.delete(document.relativePath);
+                  }
+                }}
                 type="button"
               >
                 <span className="file-row">
@@ -251,7 +310,7 @@ export const FileBrowser = memo(function FileBrowser({
               ) : null}
               {deleteCandidate === document.relativePath ? (
                 <div className="file-delete-confirm" role="group" aria-label="Confirm delete file">
-                  <span>Delete review data too?</span>
+                  <span>Delete this file and its review data?</span>
                   <button
                     className="file-row-action danger"
                     disabled={isRefreshing}
@@ -261,7 +320,7 @@ export const FileBrowser = memo(function FileBrowser({
                     }}
                     type="button"
                   >
-                    Delete
+                    Delete file + review data
                   </button>
                   <button
                     className="file-row-action"

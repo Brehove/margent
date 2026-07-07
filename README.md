@@ -194,6 +194,10 @@ Margent's editor keeps Markdown as the source of truth while the toolbar, Format
 | `Cmd/Ctrl+Shift+9` | Task list |
 | `Cmd/Ctrl+Shift+.` | Blockquote |
 | `Cmd/Ctrl+Alt+C` | Code block |
+| `Cmd/Ctrl+Shift+F` | Find in workspace |
+| `Cmd/Ctrl+Alt+F` | Focus Mode |
+| `Cmd/Ctrl++` / `Cmd/Ctrl+-` | Zoom in / out |
+| `Cmd/Ctrl+0` | Reset editor zoom |
 | `Tab` / `Shift+Tab` inside a table | Move between table cells; `Tab` at the last cell appends a row |
 
 Mode 2: Margent UI inside the Codex in-app browser.

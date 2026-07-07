@@ -290,7 +290,7 @@ describe("FileBrowser rendering", () => {
     fireEvent.click(screen.getByRole("button", { name: "Delete" }));
     fireEvent.click(
       within(screen.getByRole("group", { name: "Confirm delete file" })).getByRole("button", {
-        name: "Delete",
+        name: "Delete file + review data",
       }),
     );
 

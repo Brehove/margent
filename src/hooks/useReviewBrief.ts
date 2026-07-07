@@ -39,9 +39,13 @@ export function useReviewBrief({
     () => buildReviewBriefEntries(workspace?.documents ?? [], threads, proposals),
     [proposals, threads, workspace?.documents],
   );
+  const resolvedEntries = useMemo(
+    () => buildResolvedReviewBriefEntries(workspace?.documents ?? [], threads),
+    [threads, workspace?.documents],
+  );
   const resolvedCount = useMemo(
-    () => threads.filter((thread) => thread.status === "resolved").length,
-    [threads],
+    () => resolvedEntries.length,
+    [resolvedEntries],
   );
 
   const loadBrief = useCallback(async () => {
@@ -192,6 +196,7 @@ export function useReviewBrief({
       loadBrief,
       rejectProposal,
       replyToThread,
+      resolvedEntries,
       resolvedCount,
     }),
     [
@@ -205,6 +210,7 @@ export function useReviewBrief({
       rejectProposal,
       reviewDataErrorMessage,
       replyToThread,
+      resolvedEntries,
       resolvedCount,
     ],
   );
@@ -272,6 +278,40 @@ export function buildReviewBriefEntries(
     });
 
   return entries.sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
+}
+
+export function buildResolvedReviewBriefEntries(
+  documents: DocumentSummary[],
+  threads: ThreadRecord[],
+): ReviewBriefEntry[] {
+  const documentsById = new Map(documents.map((document) => [document.id, document]));
+
+  return threads
+    .filter((thread) => thread.status === "resolved")
+    .flatMap((thread): ReviewBriefEntry[] => {
+      const document = documentsById.get(thread.documentId);
+      if (!document) {
+        return [];
+      }
+
+      return [
+        {
+          agentSummary:
+            excerpt(thread.messages[thread.messages.length - 1]?.body ?? thread.title) ||
+            "Resolved thread",
+          anchorExcerpt: excerpt(thread.anchor.quote),
+          document,
+          id: `resolved:${thread.id}`,
+          isOlderVersion:
+            (thread.lastReanchorContentHash ?? thread.anchor.baseContentHash) !==
+            document.currentContentHash,
+          kind: "agent-thread",
+          thread,
+          updatedAt: thread.updatedAt || thread.createdAt,
+        },
+      ];
+    })
+    .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
 }
 
 function findLatestAgentMessage(thread: ThreadRecord) {

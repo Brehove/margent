@@ -1,5 +1,9 @@
 import { useEffect, useRef } from "react";
 import { invokeBackend, isDesktopBackend, listenBackend, openBackend, watchBackend, type WatchEvent } from "../lib/backend";
+import {
+  flushActiveEditorDraft,
+  type ActiveEditorFlushResult,
+} from "../lib/activeEditorFlush";
 import { measurePerfAsync } from "../lib/devPerf";
 import { getErrorMessage } from "../lib/errorMessage";
 import {
@@ -25,6 +29,7 @@ const SETTLED_DOCUMENT_REFRESH_DELAY_MS = 350;
 const WORKSPACE_EXCLUDED_DIRECTORIES = new Set([".mdreview", ".git", "node_modules", "target", "dist"]);
 const OPEN_REQUEST_EVENT = "margent://open-request";
 let latestWorkspaceRequestToken = 0;
+let saveQueue: Promise<ActiveEditorFlushResult> = Promise.resolve("idle");
 
 function beginWorkspaceRequest() {
   latestWorkspaceRequestToken += 1;
@@ -510,6 +515,14 @@ async function hydrateWorkspace(
   const requestToken = beginWorkspaceRequest();
   const store = useWorkspaceStore.getState();
   store.setErrorMessage(null);
+
+  if (store.activeDocument && store.isEditorDirty) {
+    const flushResult = await flushActiveEditorDraft();
+    if (flushResult === "blocked" || flushResult === "conflict" || flushResult === "error") {
+      return;
+    }
+  }
+
   store.setStatus("loading");
 
   try {
@@ -623,6 +636,17 @@ export async function loadDocument(
   const requestToken = options.requestToken ?? beginWorkspaceRequest();
   const store = useWorkspaceStore.getState();
   store.setErrorMessage(null);
+
+  if (
+    store.activeDocument &&
+    store.activeDocument.relativePath !== relativePath &&
+    store.isEditorDirty
+  ) {
+    const flushResult = await flushActiveEditorDraft();
+    if (flushResult === "blocked" || flushResult === "conflict" || flushResult === "error") {
+      return;
+    }
+  }
 
   try {
     const document = await invokeBackend<DocumentPayload>("read_document", {
@@ -952,11 +976,17 @@ export async function importWorkspaceAssetFromPath(sourcePath: string) {
   }
 }
 
-export async function saveCurrentDocument(content: string) {
+export async function saveCurrentDocument(content: string): Promise<ActiveEditorFlushResult> {
+  const saveRun = saveQueue.then(() => saveCurrentDocumentOnce(content));
+  saveQueue = saveRun.catch(() => "error");
+  return saveRun;
+}
+
+async function saveCurrentDocumentOnce(content: string): Promise<ActiveEditorFlushResult> {
   const latest = useWorkspaceStore.getState();
 
   if (!latest.workspace || !latest.activeDocument || latest.isSaving) {
-    return;
+    return latest.isSaving ? "blocked" : "idle";
   }
 
   const { activeDocument, workspace } = latest;
@@ -966,11 +996,11 @@ export async function saveCurrentDocument(content: string) {
       localContent: content,
     });
     latest.setErrorMessage("Resolve the disk-change conflict before saving again.");
-    return;
+    return "conflict";
   }
 
   if (!latest.isEditorDirty && content === activeDocument.content) {
-    return;
+    return "idle";
   }
 
   latest.setIsSaving(true);
@@ -994,7 +1024,7 @@ export async function saveCurrentDocument(content: string) {
     );
 
     if (!isStillActiveDocument(workspace.rootPath, activeDocument.relativePath)) {
-      return;
+      return "blocked";
     }
 
     if (result.status === "conflict") {
@@ -1004,7 +1034,7 @@ export async function saveCurrentDocument(content: string) {
       });
 
       if (!isStillActiveDocument(workspace.rootPath, activeDocument.relativePath)) {
-        return;
+        return "blocked";
       }
 
       const conflict: SaveConflict = {
@@ -1020,15 +1050,17 @@ export async function saveCurrentDocument(content: string) {
       store.setIsEditorDirty(true);
       store.setPendingExternalDocument(diskDocument);
       store.setSaveConflict(conflict);
-      return;
+      return "conflict";
     }
 
     const { document } = result;
     applyDocumentPayload(document);
+    return "saved";
   } catch (error) {
     useWorkspaceStore
       .getState()
       .setErrorMessage(getErrorMessage(error, "Unable to save the active document."));
+    return "error";
   } finally {
     useWorkspaceStore.getState().setIsSaving(false);
   }

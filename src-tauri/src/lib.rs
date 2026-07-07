@@ -275,8 +275,9 @@ fn build_app_menu<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> tauri::Result
         .build(app)?;
     let toggle_files =
         MenuItemBuilder::with_id(MENU_TOGGLE_FILES, "Toggle File Pane").build(app)?;
-    let toggle_focus_mode =
-        MenuItemBuilder::with_id(MENU_TOGGLE_FOCUS_MODE, "Focus Mode").build(app)?;
+    let toggle_focus_mode = MenuItemBuilder::with_id(MENU_TOGGLE_FOCUS_MODE, "Focus Mode")
+        .accelerator("CmdOrCtrl+Alt+F")
+        .build(app)?;
     let zoom_in = MenuItemBuilder::with_id(MENU_ZOOM_IN, "Zoom In")
         .accelerator("CmdOrCtrl+=")
         .build(app)?;

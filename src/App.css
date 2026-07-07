@@ -144,9 +144,17 @@ button {
 }
 
 .info-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
   border-color: rgba(30, 107, 101, 0.24);
   background: rgba(30, 107, 101, 0.1);
   color: var(--fg-ink);
+}
+
+.banner-dismiss-button {
+  flex: 0 0 auto;
 }
 
 .save-conflict-banner {
@@ -881,8 +889,16 @@ button {
 }
 
 .table-format-group {
-  flex: 1 1 100%;
+  flex: 0 0 100%;
   flex-wrap: wrap;
+  min-height: 32px;
+  padding-top: 6px;
+  border-right: 0;
+}
+
+.table-format-group.is-inactive {
+  visibility: hidden;
+  pointer-events: none;
 }
 
 .format-button {
@@ -899,17 +915,20 @@ button {
   line-height: 1;
 }
 
-.format-button:hover:not(:disabled),
+.format-button:hover:not(:disabled) {
+  border-color: var(--color-rule);
+  background: var(--format-button-hover-bg);
+}
+
 .format-button:focus-visible {
   border-color: var(--color-rule);
-  background: #fff;
-  outline: none;
+  background: var(--format-button-hover-bg);
 }
 
 .format-button.is-active,
 .format-button[aria-pressed="true"] {
-  border-color: rgba(30, 107, 101, 0.3);
-  background: rgba(30, 107, 101, 0.12);
+  border-color: var(--format-button-active-border);
+  background: var(--format-button-active-bg);
   color: var(--accent-strong);
 }
 
@@ -919,7 +938,7 @@ button {
 }
 
 .editor-shell.is-rendered-shell .editor-hint-bar {
-  background: #ffffff;
+  background: var(--ledger-canvas);
 }
 
 .editor-title-group h2 {
@@ -1628,7 +1647,8 @@ button {
 }
 
 .proposal-message,
-.proposal-error-text {
+.proposal-error-text,
+.proposal-status-text {
   margin: 10px 0 0;
 }
 
@@ -1658,6 +1678,11 @@ button {
 
 .proposal-error-text {
   color: #8b3b1b;
+}
+
+.proposal-status-text {
+  color: var(--ledger-success-fg);
+  font-weight: 650;
 }
 
 .proposal-warning-block {
@@ -4015,6 +4040,34 @@ button {
   margin-top: 18px;
   border-top: 1px solid var(--color-rule-soft);
   padding-top: 14px;
+}
+
+.review-brief-resolved-list {
+  display: grid;
+  gap: 6px;
+  margin-top: 10px;
+}
+
+.review-brief-resolved-item {
+  display: grid;
+  gap: 2px;
+  width: 100%;
+  border: 1px solid transparent;
+  border-radius: var(--ledger-radius);
+  background: transparent;
+  color: var(--ledger-ink);
+  padding: 8px 10px;
+  text-align: left;
+}
+
+.review-brief-resolved-item:hover,
+.review-brief-resolved-item:focus-visible {
+  border-color: var(--ledger-hairline);
+  background: var(--ledger-panel);
+}
+
+.review-brief-resolved-item small {
+  color: var(--ledger-ink-soft);
 }
 
 .project-search-view {

@@ -53,3 +53,34 @@ New post-memoization medians (same corpus, same machine class):
 | `buildRenderedMarkdownDecorations footnote-heavy` | 0.936 | 1.090 |
 
 Treat these as the current gate reference for the rendered path.
+
+## Addendum — 2026-07-06 (tables-v2 + JSON gate)
+
+Command: `npm run perf:report`
+
+Changes:
+
+- The perf harness now enables the same Lezer `Table` extension as the app.
+- The corpus now includes `manyTables` (30 tables x 20 rows, interleaved with prose) and `giantTable` (200 rows x 10 columns).
+- `tests/PERF_BASELINE.json` is the enforceable opt-in gate. Run `MARGENT_PERF_GATE=1 npm run perf:report`; medians must stay at or below `1.25x` the JSON baseline.
+- To update baselines, run the report twice on the same machine class, copy stable medians into `tests/PERF_BASELINE.json`, and document the reason here.
+
+Current medians from this update:
+
+| Label | Median ms | P95 ms |
+| --- | ---: | ---: |
+| `doc.toString large plain` | 0.006 | 0.028 |
+| `buildThreadPresentation many-thread` | 0.055 | 0.146 |
+| `buildThreadPresentation footnote-heavy` | 0.077 | 0.115 |
+| `mapThreadPresentation cumulative edits` | 0.261 | 0.270 |
+| `resolveThreadAnchors footnote-heavy` | 0.028 | 0.043 |
+| `buildReadableMarkdownDecorations large plain` | 0.074 | 0.106 |
+| `buildReadableMarkdownDecorations many-thread` | 0.029 | 0.032 |
+| `buildReadableMarkdownDecorations footnote-heavy` | 0.032 | 0.056 |
+| `buildRenderedMarkdownDecorations large plain` | 1.030 | 1.172 |
+| `buildRenderedMarkdownDecorations many-thread` | 0.377 | 0.407 |
+| `buildRenderedMarkdownDecorations footnote-heavy` | 0.732 | 0.852 |
+| `buildRenderedMarkdownDecorations many-tables` | 1.054 | 1.140 |
+| `buildRenderedMarkdownDecorations giant-table` | 1.050 | 1.079 |
+| `buildProposalReviewDecorations 100 hunks` | 0.024 | 0.069 |
+| `buildProposalReviewDecorations 500 hunks` | 0.120 | 0.143 |

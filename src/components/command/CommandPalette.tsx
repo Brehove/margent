@@ -1,4 +1,4 @@
-import { memo, useEffect, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { DocumentSummary } from "../../types/workspace";
 
 export type CommandPaletteMode = "commands" | "files";
@@ -87,6 +87,9 @@ export const CommandPalette = memo(function CommandPalette({
   onSelectDocument,
 }: CommandPaletteProps) {
   const inputRef = useRef<HTMLInputElement | null>(null);
+  const activeItemRef = useRef<HTMLButtonElement | null>(null);
+  const dialogRef = useRef<HTMLElement | null>(null);
+  const previousFocusRef = useRef<HTMLElement | null>(null);
   const [query, setQuery] = useState("");
   const [activeIndex, setActiveIndex] = useState(0);
   const entries = useMemo(() => {
@@ -114,34 +117,83 @@ export const CommandPalette = memo(function CommandPalette({
   }, [commands, documents, mode, query]);
 
   useEffect(() => {
+    previousFocusRef.current =
+      document.activeElement instanceof HTMLElement ? document.activeElement : null;
     inputRef.current?.focus();
+
+    return () => {
+      previousFocusRef.current?.focus();
+    };
   }, []);
 
   useEffect(() => {
     setActiveIndex(0);
   }, [mode, query]);
 
-  const selectEntry = (entry: PaletteEntry) => {
-    if (entry.disabled) {
-      return;
-    }
+  useEffect(() => {
+    activeItemRef.current?.scrollIntoView({ block: "nearest" });
+  }, [activeIndex, entries.length]);
 
-    if (entry.kind === "files" && entry.relativePath) {
-      onSelectDocument(entry.relativePath);
-    } else if (entry.kind === "commands") {
-      onSelectCommand(entry.id);
-    }
-    onClose();
-  };
+  const selectEntry = useCallback(
+    (entry: PaletteEntry) => {
+      if (entry.disabled) {
+        return;
+      }
+
+      if (entry.kind === "files" && entry.relativePath) {
+        onSelectDocument(entry.relativePath);
+      } else if (entry.kind === "commands") {
+        onSelectCommand(entry.id);
+      }
+      onClose();
+    },
+    [onClose, onSelectCommand, onSelectDocument],
+  );
+
+  const handleDialogKeyDown = useCallback(
+    (event: React.KeyboardEvent<HTMLElement>) => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        onClose();
+        return;
+      }
+
+      if (event.key !== "Tab") {
+        return;
+      }
+
+      const focusable = Array.from(
+        dialogRef.current?.querySelectorAll<HTMLElement>(
+          'button:not(:disabled), input:not(:disabled), [tabindex]:not([tabindex="-1"])',
+        ) ?? [],
+      ).filter((element) => element.offsetParent !== null);
+      if (focusable.length === 0) {
+        return;
+      }
+
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
+    },
+    [onClose],
+  );
 
   const activeEntry = entries[Math.min(activeIndex, Math.max(entries.length - 1, 0))] ?? null;
 
   return (
     <div className="command-palette-backdrop" onMouseDown={onClose}>
       <section
+        ref={dialogRef}
         aria-label={mode === "files" ? "Quick open" : "Command palette"}
         aria-modal="true"
         className="command-palette"
+        onKeyDown={handleDialogKeyDown}
         onMouseDown={(event) => event.stopPropagation()}
         role="dialog"
       >
@@ -153,11 +205,6 @@ export const CommandPalette = memo(function CommandPalette({
             className="command-palette-input"
             onChange={(event) => setQuery(event.target.value)}
             onKeyDown={(event) => {
-              if (event.key === "Escape") {
-                event.preventDefault();
-                onClose();
-                return;
-              }
               if (event.key === "ArrowDown") {
                 event.preventDefault();
                 setActiveIndex((current) =>
@@ -198,6 +245,7 @@ export const CommandPalette = memo(function CommandPalette({
                   key={`${entry.kind}:${entry.id}`}
                   onClick={() => selectEntry(entry)}
                   onMouseEnter={() => setActiveIndex(index)}
+                  ref={isActive ? activeItemRef : undefined}
                   role="option"
                   type="button"
                 >

@@ -39,6 +39,7 @@ import {
 } from "@codemirror/view";
 import { tags } from "@lezer/highlight";
 import type { SyntaxNode } from "@lezer/common";
+import { Table } from "@lezer/markdown";
 import { useEffect, useRef, useState } from "react";
 import { resolveThreadAnchors } from "../../lib/anchorResolution";
 import { measurePerf } from "../../lib/devPerf";
@@ -57,12 +58,16 @@ import {
 import {
   deleteMarkdownTableColumn,
   deleteMarkdownTableRow,
+  collectMarkdownTableRanges,
+  getTableModelAt,
   insertMarkdownTableColumn,
   insertMarkdownTableRow,
   moveMarkdownTableCell,
   setMarkdownTableColumnAlignment,
   tidyMarkdownTable,
   type MarkdownTableCommand,
+  type MarkdownTableModel,
+  type MarkdownTableRow,
 } from "./markdownTable";
 import {
   getProposalHunkAnchorPosition,
@@ -82,7 +87,7 @@ interface UseCodeMirrorOptions {
   onCreateLinkRequested?: (selection: EditorSelectionSnapshot) => void;
   onFocusModeTypingActivity?: () => void;
   onImportImageAsset?: (file: File) => Promise<string>;
-  onSaveRequested?: (content: string) => void;
+  onSaveRequested?: (content: string) => Promise<unknown> | void;
   onSelectionChange?: (selection: EditorSelectionSnapshot | null) => void;
   onThreadSelect?: (threadId: string | null) => void;
   proposalReview?: ProposalReviewEditorState | null;
@@ -474,11 +479,6 @@ interface RenderedMarkdownProjection {
   decorations: DecorationSet;
 }
 
-interface MarkdownTableRange extends RevealRangeSpec {
-  endLine: number;
-  startLine: number;
-}
-
 class MarkdownMarkerWidget extends WidgetType {
   constructor(
     private readonly text: string,
@@ -643,8 +643,11 @@ class MarkdownImageBlockWidget extends WidgetType {
 }
 
 interface MarkdownTablePreviewCell {
+  columnIndex: number;
   contentFrom: number;
   contentTo: number;
+  rowIndex: number;
+  tableFrom: number;
   text: string;
 }
 
@@ -654,6 +657,12 @@ interface MarkdownTablePreview {
   rows: MarkdownTablePreviewCell[][];
   source: string;
 }
+
+const MARKDOWN_TABLE_MIN_COLUMN_WIDTH_PX = 112;
+const MARKDOWN_TABLE_MAX_DEFAULT_COLUMN_WIDTH_PX = 360;
+const MARKDOWN_TABLE_CHARACTER_WIDTH_PX = 7.5;
+const MARKDOWN_TABLE_CELL_CHROME_WIDTH_PX = 48;
+const markdownTableColumnWidthsByView = new WeakMap<EditorView, Map<number, number[]>>();
 
 class MarkdownTablePreviewWidget extends WidgetType {
   constructor(
@@ -667,14 +676,50 @@ class MarkdownTablePreviewWidget extends WidgetType {
   eq(other: MarkdownTablePreviewWidget) {
     return (
       this.from === other.from &&
-      this.to === other.to &&
-      this.preview.source === other.preview.source
+      this.preview.headers.length === other.preview.headers.length &&
+      this.preview.rows.length === other.preview.rows.length &&
+      this.preview.rows.every(
+        (row, rowIndex) => row.length === (other.preview.rows[rowIndex]?.length ?? -1),
+      )
     );
+  }
+
+  updateDOM(dom: HTMLElement, view: EditorView) {
+    const inputs = Array.from(dom.querySelectorAll<HTMLInputElement>(".cm-md-table-cell-input"));
+    const cells = [this.preview.headers, ...this.preview.rows].flat();
+    inputs.forEach((input, index) => {
+      const cell = cells[index];
+      if (!cell) {
+        return;
+      }
+      input.dataset.columnIndex = String(cell.columnIndex);
+      input.dataset.rowIndex = String(cell.rowIndex);
+      input.dataset.tableFrom = String(cell.tableFrom);
+      input.defaultValue = cell.text;
+      if (document.activeElement === input) {
+        return;
+      }
+      input.value = cell.text;
+    });
+    applyMarkdownTableColumnWidths(
+      dom,
+      getMarkdownTableColumnWidths(view, this.from, this.preview),
+    );
+    const rows = Array.from(dom.querySelectorAll<HTMLTableRowElement>("tr"));
+    rows.forEach((row) => {
+      Array.from(row.children).forEach((child, columnIndex) => {
+        if (child instanceof HTMLTableCellElement) {
+          applyTableCellAlignment(child, this.preview.alignments[columnIndex] ?? null);
+        }
+      });
+    });
+    return true;
   }
 
   toDOM(view: EditorView) {
     const wrapper = document.createElement("div");
     wrapper.className = "cm-md-table-block";
+    wrapper.dataset.tableFrom = String(this.from);
     wrapper.tabIndex = 0;
     wrapper.title = "Edit Markdown table";
     wrapper.addEventListener("mousedown", (event) => {
@@ -684,10 +729,20 @@ class MarkdownTablePreviewWidget extends WidgetType {
       }
 
       event.preventDefault();
-      selectMarkdownTableSource(view, this.from, this.to);
+      wrapper.classList.add("is-selected");
+      wrapper.setAttribute("aria-selected", "true");
+      wrapper.focus();
     });
     wrapper.addEventListener("keydown", (event) => {
+      const target = event.target;
+      if (target instanceof Element && target.closest("input, button")) {
+        return;
+      }
+
       if (event.key !== "Backspace" && event.key !== "Delete") {
+        if (event.key.length === 1) {
+          event.preventDefault();
+        }
         return;
       }
 
@@ -705,12 +760,23 @@ class MarkdownTablePreviewWidget extends WidgetType {
     });
 
     const table = document.createElement("table");
+    const columnWidths = getMarkdownTableColumnWidths(view, this.from, this.preview);
+    const colgroup = document.createElement("colgroup");
+    columnWidths.forEach((_, index) => {
+      const column = document.createElement("col");
+      column.dataset.columnIndex = String(index);
+      colgroup.append(column);
+    });
+    table.append(colgroup);
     const thead = document.createElement("thead");
     const headerRow = document.createElement("tr");
     this.preview.headers.forEach((cell, index) => {
       const tableCell = document.createElement("th");
       applyTableCellAlignment(tableCell, this.preview.alignments[index] ?? null);
       tableCell.append(createMarkdownTableCellInput(view, cell, `Header ${index + 1}`));
+      tableCell.append(
+        createMarkdownTableColumnResizeHandle(view, wrapper, this.from, this.preview, index),
+      );
       headerRow.append(tableCell);
     });
     thead.append(headerRow);
@@ -724,8 +790,11 @@ class MarkdownTablePreviewWidget extends WidgetType {
         const tableCell = document.createElement("td");
         applyTableCellAlignment(tableCell, this.preview.alignments[index] ?? null);
         const cell = row[index] ?? {
+          columnIndex: index,
           contentFrom: this.to,
           contentTo: this.to,
+          rowIndex: rowIndex + 2,
+          tableFrom: this.from,
           text: "",
         };
         tableCell.append(
@@ -736,14 +805,57 @@ class MarkdownTablePreviewWidget extends WidgetType {
       tbody.append(tableRow);
     });
     table.append(tbody);
-    wrapper.append(table);
+    applyMarkdownTableColumnWidths(table, columnWidths);
+    const tableScroll = document.createElement("div");
+    tableScroll.className = "cm-md-table-scroll";
+    tableScroll.append(table);
+    wrapper.append(tableScroll);
 
     const actions = document.createElement("div");
     actions.className = "cm-md-table-actions";
+    const tableCommands: Array<{
+      command: MarkdownTableCommand;
+      label: string;
+      title: string;
+    }> = [
+      { command: "row-above", label: "+ Row Above", title: "Insert row above" },
+      { command: "row-below", label: "+ Row Below", title: "Insert row below" },
+      { command: "column-left", label: "+ Col Left", title: "Insert column left" },
+      { command: "column-right", label: "+ Col Right", title: "Insert column right" },
+      { command: "align-left", label: "Left", title: "Align column left" },
+      { command: "align-center", label: "Center", title: "Align column center" },
+      { command: "align-right", label: "Right", title: "Align column right" },
+      { command: "align-none", label: "Align Off", title: "Clear column alignment" },
+      { command: "delete-row", label: "Delete Row", title: "Delete current row" },
+      { command: "delete-column", label: "Delete Col", title: "Delete current column" },
+    ];
+    tableCommands.forEach(({ command, label, title }) => {
+      const actionButton = document.createElement("button");
+      actionButton.className = "cm-md-table-action-button";
+      actionButton.textContent = label;
+      actionButton.title = title;
+      actionButton.type = "button";
+      actionButton.addEventListener("mousedown", (event) => {
+        event.preventDefault();
+      });
+      actionButton.addEventListener("click", (event) => {
+        event.preventDefault();
+        if (!getTableModelAt(view.state, view.state.selection.main.from)) {
+          view.dispatch({ selection: { anchor: this.from } });
+        }
+        runMarkdownTableCommand(view, command);
+        view.focus();
+      });
+      actions.append(actionButton);
+    });
+
     const deleteButton = document.createElement("button");
     deleteButton.className = "cm-md-table-action-button";
-    deleteButton.textContent = "Delete";
+    deleteButton.textContent = "Delete Table";
     deleteButton.type = "button";
+    deleteButton.addEventListener("mousedown", (event) => {
+      event.preventDefault();
+    });
     deleteButton.addEventListener("click", (event) => {
       event.preventDefault();
       view.dispatch({
@@ -758,6 +870,20 @@ class MarkdownTablePreviewWidget extends WidgetType {
       view.focus();
     });
     actions.append(deleteButton);
+    const tidyButton = document.createElement("button");
+    tidyButton.className = "cm-md-table-action-button";
+    tidyButton.textContent = "Tidy";
+    tidyButton.type = "button";
+    tidyButton.addEventListener("mousedown", (event) => {
+      event.preventDefault();
+    });
+    tidyButton.addEventListener("click", (event) => {
+      event.preventDefault();
+      view.dispatch({ selection: { anchor: this.from } });
+      tidyMarkdownTable(view);
+      view.focus();
+    });
+    actions.append(tidyButton);
     wrapper.append(actions);
 
     return wrapper;
@@ -777,58 +903,271 @@ function createMarkdownTableCellInput(
   input.className = "cm-md-table-cell-input";
   input.type = "text";
   input.value = cell.text;
+  input.defaultValue = cell.text;
+  input.dataset.columnIndex = String(cell.columnIndex);
+  input.dataset.rowIndex = String(cell.rowIndex);
+  input.dataset.tableFrom = String(cell.tableFrom);
   input.setAttribute("aria-label", label);
   input.spellcheck = true;
 
   const selectCellSource = () => {
+    const currentCell = resolveMarkdownTableInputCell(view, input);
+    if (!currentCell) {
+      return;
+    }
     view.dispatch({
       selection: {
-        anchor: cell.contentFrom,
-        head: cell.contentTo,
+        anchor: currentCell.contentFrom,
+        head: currentCell.contentTo,
       },
     });
   };
-  const commit = () => {
+  const commitIfChanged = () => {
     const nextText = escapeMarkdownTableCellInput(input.value);
-    if (nextText === view.state.doc.sliceString(cell.contentFrom, cell.contentTo)) {
+    const currentCell = resolveMarkdownTableInputCell(view, input);
+    if (!currentCell) {
+      return;
+    }
+
+    if (nextText === view.state.doc.sliceString(currentCell.contentFrom, currentCell.contentTo)) {
       return;
     }
 
     view.dispatch({
       changes: {
-        from: cell.contentFrom,
+        from: currentCell.contentFrom,
         insert: nextText,
-        to: cell.contentTo,
+        to: currentCell.contentTo,
       },
       selection: {
-        anchor: cell.contentFrom,
-        head: cell.contentFrom + nextText.length,
+        anchor: currentCell.contentFrom,
+        head: currentCell.contentFrom + nextText.length,
       },
     });
   };
 
   input.addEventListener("focus", selectCellSource);
-  input.addEventListener("change", commit);
-  input.addEventListener("blur", commit);
+  input.addEventListener("change", commitIfChanged);
+  input.addEventListener("blur", commitIfChanged);
   input.addEventListener("keydown", (event) => {
-    if (event.key === "Enter") {
+    event.stopPropagation();
+    if (event.key === "Enter" || event.key === "Tab") {
       event.preventDefault();
-      input.blur();
+      commitIfChanged();
+      const direction = event.shiftKey ? -1 : 1;
+      if (!focusAdjacentMarkdownTableInput(input, direction)) {
+        if (moveMarkdownTableCell(view, direction)) {
+          requestAnimationFrame(() => {
+            focusMarkdownTableInputAtSelection(view);
+          });
+        } else {
+          input.blur();
+        }
+      }
     } else if (event.key === "Escape") {
       event.preventDefault();
-      input.value = cell.text;
+      input.value = input.defaultValue;
       input.blur();
+      view.focus();
     }
   });
 
   return input;
 }
 
-function selectMarkdownTableSource(view: EditorView, from: number, to: number) {
-  view.dispatch({
-    selection: EditorSelection.range(from, to),
-  });
+function resolveMarkdownTableInputCell(view: EditorView, input: HTMLInputElement) {
+  const tableFrom = Number(input.dataset.tableFrom);
+  const rowIndex = Number(input.dataset.rowIndex);
+  const columnIndex = Number(input.dataset.columnIndex);
+  if (!Number.isFinite(tableFrom) || !Number.isFinite(rowIndex) || !Number.isFinite(columnIndex)) {
+    return null;
+  }
+
+  const model = getTableModelAt(view.state, tableFrom);
+  const row = model?.rows.find((candidate) => candidate.rowIndex === rowIndex);
+  return row?.cells[columnIndex] ?? null;
+}
+
+function focusAdjacentMarkdownTableInput(input: HTMLInputElement, direction: number) {
+  const table = input.closest("table");
+  if (!table) {
+    input.blur();
+    return false;
+  }
+
+  const inputs = Array.from(table.querySelectorAll<HTMLInputElement>(".cm-md-table-cell-input"));
+  const currentIndex = inputs.indexOf(input);
+  const target = inputs[currentIndex + direction];
+  if (!target) {
+    return false;
+  }
+
+  target.focus();
+  target.select();
+  return true;
+}
+
+function focusMarkdownTableInputAtSelection(view: EditorView) {
+  const selection = view.state.selection.main;
+  const model = getTableModelAt(view.state, selection.from);
+  if (!model) {
+    view.focus();
+    return;
+  }
+
+  for (const row of model.rows) {
+    const cell = row.cells.find(
+      (candidate) =>
+        selection.from >= candidate.contentFrom && selection.from <= candidate.contentTo,
+    );
+    if (!cell) {
+      continue;
+    }
+
+    const wrapper = view.dom.querySelector<HTMLElement>(
+      `.cm-md-table-block[data-table-from="${model.range.from}"]`,
+    );
+    const input = wrapper?.querySelector<HTMLInputElement>(
+      `.cm-md-table-cell-input[data-row-index="${cell.rowIndex}"][data-column-index="${cell.columnIndex}"]`,
+    );
+    if (input) {
+      input.focus();
+      input.select();
+      return;
+    }
+  }
+
   view.focus();
+}
+
+function createMarkdownTableColumnResizeHandle(
+  view: EditorView,
+  wrapper: HTMLElement,
+  tableFrom: number,
+  preview: MarkdownTablePreview,
+  columnIndex: number,
+) {
+  const handle = document.createElement("span");
+  handle.className = "cm-md-table-column-resize-handle";
+  handle.tabIndex = -1;
+  handle.title = "Drag to resize column; double-click to reset";
+  handle.setAttribute("role", "separator");
+  handle.setAttribute("aria-orientation", "vertical");
+
+  handle.addEventListener("mousedown", (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+
+    const startX = event.clientX;
+    const startWidths = getMarkdownTableColumnWidths(view, tableFrom, preview);
+    const startWidth = startWidths[columnIndex] ?? MARKDOWN_TABLE_MIN_COLUMN_WIDTH_PX;
+    const previousCursor = document.body.style.cursor;
+    const previousUserSelect = document.body.style.userSelect;
+    document.body.style.cursor = "col-resize";
+    document.body.style.userSelect = "none";
+    wrapper.classList.add("is-resizing-column");
+
+    const onMouseMove = (moveEvent: MouseEvent) => {
+      moveEvent.preventDefault();
+      const nextWidths = [...startWidths];
+      nextWidths[columnIndex] = clampMarkdownTableColumnWidth(
+        startWidth + moveEvent.clientX - startX,
+      );
+      setMarkdownTableColumnWidths(view, tableFrom, nextWidths);
+      applyMarkdownTableColumnWidths(wrapper, nextWidths);
+    };
+
+    const onMouseUp = () => {
+      window.removeEventListener("mousemove", onMouseMove);
+      window.removeEventListener("mouseup", onMouseUp);
+      document.body.style.cursor = previousCursor;
+      document.body.style.userSelect = previousUserSelect;
+      wrapper.classList.remove("is-resizing-column");
+    };
+
+    window.addEventListener("mousemove", onMouseMove);
+    window.addEventListener("mouseup", onMouseUp);
+  });
+
+  handle.addEventListener("dblclick", (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    const defaultWidths = estimateMarkdownTableColumnWidths(preview);
+    const nextWidths = getMarkdownTableColumnWidths(view, tableFrom, preview);
+    nextWidths[columnIndex] =
+      defaultWidths[columnIndex] ?? MARKDOWN_TABLE_MIN_COLUMN_WIDTH_PX;
+    setMarkdownTableColumnWidths(view, tableFrom, nextWidths);
+    applyMarkdownTableColumnWidths(wrapper, nextWidths);
+  });
+
+  return handle;
+}
+
+function getMarkdownTableColumnWidths(
+  view: EditorView,
+  tableFrom: number,
+  preview: MarkdownTablePreview,
+) {
+  const defaults = estimateMarkdownTableColumnWidths(preview);
+  const overrides = markdownTableColumnWidthsByView.get(view)?.get(tableFrom);
+  if (!overrides || overrides.length !== defaults.length) {
+    return defaults;
+  }
+
+  return defaults.map((defaultWidth, index) =>
+    clampMarkdownTableColumnWidth(overrides[index] ?? defaultWidth),
+  );
+}
+
+function setMarkdownTableColumnWidths(view: EditorView, tableFrom: number, widths: number[]) {
+  let widthsByTable = markdownTableColumnWidthsByView.get(view);
+  if (!widthsByTable) {
+    widthsByTable = new Map<number, number[]>();
+    markdownTableColumnWidthsByView.set(view, widthsByTable);
+  }
+  widthsByTable.set(tableFrom, widths.map(clampMarkdownTableColumnWidth));
+}
+
+function estimateMarkdownTableColumnWidths(preview: MarkdownTablePreview) {
+  const rows = [preview.headers, ...preview.rows];
+  return preview.headers.map((_, columnIndex) => {
+    const longestCellLength = rows.reduce((longest, row) => {
+      const cellText = row[columnIndex]?.text ?? "";
+      return Math.max(longest, Array.from(cellText).length);
+    }, 0);
+    const preferredWidth = Math.round(
+      longestCellLength * MARKDOWN_TABLE_CHARACTER_WIDTH_PX +
+        MARKDOWN_TABLE_CELL_CHROME_WIDTH_PX,
+    );
+    return clampMarkdownTableColumnWidth(
+      Math.min(preferredWidth, MARKDOWN_TABLE_MAX_DEFAULT_COLUMN_WIDTH_PX),
+    );
+  });
+}
+
+function applyMarkdownTableColumnWidths(root: ParentNode, widths: number[]) {
+  const table =
+    root instanceof HTMLTableElement ? root : root.querySelector<HTMLTableElement>("table");
+  if (!table) {
+    return;
+  }
+
+  const columns = Array.from(table.querySelectorAll<HTMLTableColElement>("col"));
+  widths.forEach((width, index) => {
+    const column = columns[index];
+    if (column) {
+      column.style.width = `${clampMarkdownTableColumnWidth(width)}px`;
+    }
+  });
+  const tableWidth = widths.reduce(
+    (total, width) => total + clampMarkdownTableColumnWidth(width),
+    0,
+  );
+  table.style.width = `${tableWidth}px`;
+}
+
+function clampMarkdownTableColumnWidth(width: number) {
+  return Math.max(MARKDOWN_TABLE_MIN_COLUMN_WIDTH_PX, Math.round(width));
 }
 
 function escapeMarkdownTableCellInput(value: string) {
@@ -841,6 +1180,8 @@ function applyTableCellAlignment(
 ) {
   if (alignment) {
     element.style.textAlign = alignment;
+  } else {
+    element.style.textAlign = "";
   }
 }
 
@@ -1096,6 +1437,11 @@ function buildRenderedMarkdownProjection(
         state.facet(markdownImageSourceResolverFacet),
       );
       const tableRanges = collectRenderedMarkdownTableRanges(state, visibleRanges);
+      const tableAtomicRanges = collectMarkdownTableRanges(state).filter((tableRange) =>
+        visibleRanges.some((visibleRange) =>
+          rangesOverlap(tableRange.from, tableRange.to, visibleRange.from, visibleRange.to),
+        ),
+      );
       const frontmatterRanges = collectRenderedFrontmatterRanges(state, visibleRanges);
       const fencedCodeRanges = collectRenderedFencedCodeRanges(state, visibleRanges);
       const taskListRanges = collectRenderedTaskListRanges(state, visibleRanges);
@@ -1116,6 +1462,11 @@ function buildRenderedMarkdownProjection(
       atomicRanges.push(...wikiLinkRanges.atomicRanges);
       atomicRanges.push(...fencedCodeRanges.atomicRanges);
       atomicRanges.push(...taskListRanges.atomicRanges);
+      atomicRanges.push(
+        ...tableAtomicRanges.map((range) =>
+          hiddenMarkdownSyntaxDecoration.range(range.from, range.to),
+        ),
+      );
 
       return {
         atomicRanges:
@@ -2357,7 +2708,7 @@ function collectRenderedMarkdownTableRanges(
       (visibleRange) => tableRange.from >= visibleRange.from && tableRange.from <= visibleRange.to,
     );
     if (canRenderPreview) {
-      const preview = buildMarkdownTablePreview(state, tableRange);
+      const preview = buildMarkdownTablePreview(state, tableRange.from);
       if (preview) {
         ranges.push(
           Decoration.widget({
@@ -2388,110 +2739,53 @@ function collectRenderedMarkdownTableRanges(
   return ranges;
 }
 
-function buildMarkdownTablePreview(
-  state: EditorState,
-  tableRange: MarkdownTableRange,
-): MarkdownTablePreview | null {
-  const headerLine = state.doc.line(tableRange.startLine);
-  const dividerLine = state.doc.line(tableRange.startLine + 1);
-  const headers = splitMarkdownTableRow(headerLine.text, headerLine.from).map(cleanMarkdownTableCell);
-  const alignments = splitMarkdownTableRow(dividerLine.text, dividerLine.from).map((cell) =>
-    readMarkdownTableAlignment(cell.raw),
-  );
-  if (headers.length < 2 || alignments.length < 2) {
+function buildMarkdownTablePreview(state: EditorState, position: number): MarkdownTablePreview | null {
+  const model = getTableModelAt(state, position);
+  if (!model) {
     return null;
   }
 
-  const rows: MarkdownTablePreviewCell[][] = [];
-  for (let lineNumber = tableRange.startLine + 2; lineNumber <= tableRange.endLine; lineNumber += 1) {
-    const line = state.doc.line(lineNumber);
-    rows.push(splitMarkdownTableRow(line.text, line.from).map(cleanMarkdownTableCell));
+  const header = model.rows.find((row) => row.kind === "header");
+  if (!header) {
+    return null;
   }
 
   return {
-    alignments,
-    headers,
-    rows,
-    source: state.doc.sliceString(tableRange.from, tableRange.to),
+    alignments: model.alignments.map((alignment) => (alignment === "none" ? null : alignment)),
+    headers: previewCellsForRow(header, model),
+    rows: model.rows
+      .filter((row) => row.kind === "body")
+      .map((row) => previewCellsForRow(row, model)),
+    source: state.doc.sliceString(model.range.from, model.range.to),
   };
 }
 
-function splitMarkdownTableRow(text: string, lineFrom: number) {
-  let startOffset = 0;
-  let endOffset = text.length;
-  if (text.trimStart().startsWith("|")) {
-    startOffset = text.indexOf("|") + 1;
-  }
-  if (text.trimEnd().endsWith("|")) {
-    endOffset = text.lastIndexOf("|");
-  }
-
-  const cells: Array<{
-    from: number;
-    raw: string;
-    to: number;
-  }> = [];
-  let current = "";
-  let currentFrom = startOffset;
-  let isEscaped = false;
-  for (let index = startOffset; index < endOffset; index += 1) {
-    const character = text[index] ?? "";
-    if (character === "|" && !isEscaped) {
-      cells.push({
-        from: currentFrom,
-        raw: current,
-        to: index,
-      });
-      current = "";
-      currentFrom = index + 1;
-      continue;
+function previewCellsForRow(
+  row: MarkdownTableRow,
+  model: MarkdownTableModel,
+): MarkdownTablePreviewCell[] {
+  return Array.from({ length: model.columnCount }, (_, columnIndex) => {
+    const cell = row.cells[columnIndex];
+    if (!cell) {
+      return {
+        columnIndex,
+        contentFrom: row.to,
+        contentTo: row.to,
+        rowIndex: row.rowIndex,
+        tableFrom: model.range.from,
+        text: "",
+      };
     }
 
-    current += character;
-    isEscaped = character === "\\" && !isEscaped;
-    if (character !== "\\") {
-      isEscaped = false;
-    }
-  }
-  cells.push({
-    from: currentFrom,
-    raw: current,
-    to: endOffset,
+    return {
+      columnIndex,
+      contentFrom: cell.contentFrom,
+      contentTo: cell.contentTo,
+      rowIndex: row.rowIndex,
+      tableFrom: model.range.from,
+      text: cell.text.replace(/\\\|/g, "|").replace(/\s+/g, " "),
+    };
   });
-
-  return cells.map((cell) => ({
-    from: lineFrom + cell.from,
-    raw: cell.raw,
-    to: lineFrom + cell.to,
-  }));
-}
-
-function cleanMarkdownTableCell(cell: { from: number; raw: string; to: number }): MarkdownTablePreviewCell {
-  const leadingWhitespaceLength = cell.raw.match(/^[ \t]*/)?.[0].length ?? 0;
-  const trailingWhitespaceLength = cell.raw.match(/[ \t]*$/)?.[0].length ?? 0;
-  const rawContentEnd = Math.max(leadingWhitespaceLength, cell.raw.length - trailingWhitespaceLength);
-  const rawContent = cell.raw.slice(leadingWhitespaceLength, rawContentEnd);
-  return {
-    contentFrom: cell.from + leadingWhitespaceLength,
-    contentTo: cell.from + rawContentEnd,
-    text: rawContent.replace(/\\\|/g, "|").replace(/\s+/g, " "),
-  };
-}
-
-function readMarkdownTableAlignment(text: string): "center" | "left" | "right" | null {
-  const trimmed = text.trim();
-  const starts = trimmed.startsWith(":");
-  const ends = trimmed.endsWith(":");
-  if (starts && ends) {
-    return "center";
-  }
-  if (ends) {
-    return "right";
-  }
-  if (starts) {
-    return "left";
-  }
-  return null;
 }
 
 function collectTableSyntaxMarks(line: ReturnType<Text["line"]>, isDividerLine: boolean) {
@@ -2507,87 +2801,6 @@ function collectTableSyntaxMarks(line: ReturnType<Text["line"]>, isDividerLine: 
   }
 
   return ranges;
-}
-
-// Full-document scan; memoized per immutable EditorState because several
-// rendered-mode collectors consult table ranges within a single projection
-// build. Cached arrays are treated as read-only by all callers.
-const markdownTableRangesCache = new WeakMap<EditorState, MarkdownTableRange[]>();
-
-function collectMarkdownTableRanges(state: EditorState) {
-  const cachedRanges = markdownTableRangesCache.get(state);
-  if (cachedRanges) {
-    return cachedRanges;
-  }
-
-  const ranges: MarkdownTableRange[] = [];
-  const seenRanges = new Set<string>();
-  let line = state.doc.line(1);
-
-  while (line.number <= state.doc.lines) {
-    const nextLineNumber = line.number + 1;
-    if (nextLineNumber > state.doc.lines) {
-      break;
-    }
-
-    const nextLine = state.doc.line(nextLineNumber);
-    if (looksLikeMarkdownTableHeader(line.text) && looksLikeMarkdownTableDivider(nextLine.text)) {
-      let tableEndLine = nextLine;
-      let cursorLineNumber = nextLine.number + 1;
-      while (cursorLineNumber <= state.doc.lines) {
-        const candidateLine = state.doc.line(cursorLineNumber);
-        if (!looksLikeMarkdownTableRow(candidateLine.text)) {
-          break;
-        }
-        tableEndLine = candidateLine;
-        cursorLineNumber += 1;
-      }
-
-      const key = `${line.from}:${tableEndLine.to}`;
-      if (!seenRanges.has(key)) {
-        seenRanges.add(key);
-        ranges.push({
-          endLine: tableEndLine.number,
-          from: line.from,
-          kind: "source-fallback",
-          startLine: line.number,
-          to: tableEndLine.to,
-        });
-      }
-
-      line =
-        tableEndLine.number < state.doc.lines
-          ? state.doc.line(tableEndLine.number + 1)
-          : tableEndLine;
-      if (line.number === tableEndLine.number) {
-        break;
-      }
-      continue;
-    }
-
-    if (line.number >= state.doc.lines) {
-      break;
-    }
-
-    line = state.doc.line(line.number + 1);
-  }
-
-  markdownTableRangesCache.set(state, ranges);
-  return ranges;
-}
-
-function looksLikeMarkdownTableHeader(text: string) {
-  const trimmed = text.trim();
-  const pipeCount = (trimmed.match(/\|/g) ?? []).length;
-  return pipeCount >= 2 || trimmed.startsWith("|") || trimmed.endsWith("|");
-}
-
-function looksLikeMarkdownTableDivider(text: string) {
-  return /^\s*\|?(?:\s*:?-{3,}:?\s*\|)+\s*:?-{3,}:?\s*\|?\s*$/.test(text);
-}
-
-function looksLikeMarkdownTableRow(text: string) {
-  return text.trim().length > 0 && text.includes("|");
 }
 
 function shouldHideMarkdownSyntaxNode(
@@ -3410,17 +3623,21 @@ const margentReadableTheme = EditorView.theme({
     display: "block",
     boxSizing: "border-box",
     width: "min(100%, calc(112ch + 64px))",
-    maxHeight: "48vh",
     margin: "12px 0",
-    overflow: "auto",
+    overflow: "hidden",
     border: "1.5px solid var(--editor-gutter-ink)",
     borderRadius: "5px",
     backgroundColor: "var(--editor-panel-wash)",
-    boxShadow: "0 0 0 1px rgba(13, 48, 45, 0.06)",
+    boxShadow: "var(--editor-table-shadow)",
     cursor: "text",
   },
+  ".cm-md-table-scroll": {
+    maxHeight: "48vh",
+    overflow: "auto",
+    overscrollBehavior: "contain",
+  },
   ".cm-md-table-block table": {
-    width: "100%",
+    width: "max-content",
     borderCollapse: "collapse",
     fontFamily: "var(--font-body)",
     fontSize: "0.9em",
@@ -3429,18 +3646,23 @@ const margentReadableTheme = EditorView.theme({
   },
   ".cm-md-table-block th, .cm-md-table-block td": {
     border: "1px solid var(--editor-table-rule, var(--rule-cream))",
+    overflow: "hidden",
     padding: "8px 10px",
     verticalAlign: "top",
-    whiteSpace: "normal",
-    overflowWrap: "anywhere",
+    whiteSpace: "nowrap",
+    overflowWrap: "normal",
   },
   ".cm-md-table-block th": {
-    backgroundColor: "rgba(255, 255, 255, 0.55)",
+    backgroundColor: "var(--editor-table-header-bg)",
     color: "var(--editor-ink)",
     fontWeight: "700",
+    position: "relative",
   },
   ".cm-md-table-block td": {
     color: "var(--editor-ink-secondary)",
+  },
+  ".cm-md-table-block th .cm-md-table-cell-input": {
+    paddingRight: "14px",
   },
   ".cm-md-table-cell-input": {
     display: "block",
@@ -3453,21 +3675,47 @@ const margentReadableTheme = EditorView.theme({
     color: "inherit",
     font: "inherit",
     lineHeight: "inherit",
+    overflow: "hidden",
     padding: "2px 3px",
+    textOverflow: "ellipsis",
   },
   ".cm-md-table-cell-input:focus": {
     outline: "1px solid var(--accent-link)",
-    background: "rgba(255, 255, 255, 0.72)",
+    background: "var(--editor-table-cell-focus-bg)",
   },
+  ".cm-md-table-column-resize-handle": {
+    bottom: "0",
+    cursor: "col-resize",
+    position: "absolute",
+    right: "-4px",
+    top: "0",
+    width: "8px",
+    zIndex: "2",
+  },
+  ".cm-md-table-column-resize-handle::after": {
+    background: "transparent",
+    bottom: "8px",
+    content: '""',
+    left: "3px",
+    position: "absolute",
+    top: "8px",
+    width: "2px",
+  },
+  ".cm-md-table-column-resize-handle:hover::after, .cm-md-table-block.is-resizing-column .cm-md-table-column-resize-handle::after":
+    {
+      background: "var(--accent-link)",
+    },
   ".cm-md-table-actions": {
     display: "flex",
+    flexWrap: "wrap",
+    gap: "4px",
     justifyContent: "flex-end",
     padding: "6px 8px 8px",
   },
   ".cm-md-table-action-button": {
     border: "1px solid var(--rule-cream)",
     borderRadius: "4px",
-    background: "rgba(255, 255, 255, 0.68)",
+    background: "var(--editor-table-control-bg)",
     color: "var(--editor-ink-secondary)",
     font: "600 0.75rem var(--font-ui)",
     padding: "3px 8px",
@@ -3485,7 +3733,8 @@ const margentReadableTheme = EditorView.theme({
     fontFamily: "var(--font-mono)",
     fontSize: "0.88em",
     lineHeight: "1.65",
-    minWidth: "max-content",
+    minWidth: "0",
+    overflowX: "auto",
     paddingLeft: "12px",
     paddingRight: "12px",
     whiteSpace: "pre",
@@ -3579,7 +3828,7 @@ const margentReadableTheme = EditorView.theme({
     padding: "2px 0",
   },
   ".cm-proposal-inline-revision.is-active": {
-    boxShadow: "0 0 0 1px rgba(13, 72, 69, 0.12)",
+    boxShadow: "0 0 0 1px var(--proposal-active-ring)",
   },
   ".cm-proposal-inline-revision.is-excluded": {
     opacity: "0.5",
@@ -3592,20 +3841,20 @@ const margentReadableTheme = EditorView.theme({
     padding: "0 2px",
   },
   ".cm-proposal-inline-token.is-delete": {
-    backgroundColor: "rgba(180, 35, 24, 0.09)",
-    color: "#9f2a20",
+    backgroundColor: "var(--proposal-delete-bg)",
+    color: "var(--proposal-delete-ink)",
     textDecoration: "line-through",
-    textDecorationColor: "rgba(180, 35, 24, 0.58)",
+    textDecorationColor: "var(--proposal-delete-rule)",
   },
   ".cm-proposal-inline-token.is-insert": {
-    backgroundColor: "rgba(52, 118, 70, 0.12)",
-    color: "#237044",
-    boxShadow: "inset 0 -1px 0 rgba(52, 118, 70, 0.42)",
+    backgroundColor: "var(--proposal-insert-bg)",
+    color: "var(--proposal-insert-ink)",
+    boxShadow: "inset 0 -1px 0 var(--proposal-insert-rule)",
   },
   ".cm-proposal-inline-token.is-replace": {
-    backgroundColor: "rgba(52, 118, 70, 0.12)",
-    boxShadow: "inset 0 -1px 0 rgba(52, 118, 70, 0.42)",
-    color: "#237044",
+    backgroundColor: "var(--proposal-insert-bg)",
+    boxShadow: "inset 0 -1px 0 var(--proposal-insert-rule)",
+    color: "var(--proposal-insert-ink)",
   },
   ".cm-proposal-inline-chip": {
     alignItems: "center",
@@ -3683,7 +3932,7 @@ const baseExtensions = [
   placeholder("Start writing..."),
   search({ top: true }),
   keymap.of([...searchKeymap, indentWithTab, ...markdownKeymap, ...defaultKeymap, ...historyKeymap]),
-  markdown({ codeLanguages: markdownCodeLanguages }),
+  markdown({ codeLanguages: markdownCodeLanguages, extensions: [Table] }),
   syntaxHighlighting(defaultHighlightStyle),
   syntaxHighlighting(markdownHighlightStyle),
   editorPresentationModeField,
@@ -3766,12 +4015,16 @@ export function useCodeMirror({
 }: UseCodeMirrorOptions) {
   const [hostElement, setHostElement] = useState<HTMLDivElement | null>(null);
   const initialSessionSnapshot = createInitialSessionSnapshot();
-  const initialSessionMetrics = createSessionMetricsFromContent(initialValue);
   const [sessionSnapshot, setSessionSnapshot] = useState<CodeMirrorSessionSnapshot>(
     initialSessionSnapshot,
   );
+  const initialSessionMetricsRef = useRef<CodeMirrorSessionMetrics | null>(null);
+  if (!initialSessionMetricsRef.current) {
+    initialSessionMetricsRef.current = createSessionMetricsFromContent(initialValue);
+  }
+  const initialSessionMetrics = initialSessionMetricsRef.current!;
   const [sessionMetrics, setSessionMetrics] =
-    useState<CodeMirrorSessionMetrics>(initialSessionMetrics);
+    useState<CodeMirrorSessionMetrics>(() => initialSessionMetrics);
   const [formattingContext, setFormattingContext] =
     useState<MarkdownFormattingContext>(emptyFormattingContext);
   const viewRef = useRef<EditorView | null>(null);
@@ -4698,6 +4951,18 @@ export function useCodeMirror({
                 return true;
               }
 
+              const tabularMarkdown = convertTabularPlainTextToMarkdown(plainText);
+              if (
+                tabularMarkdown &&
+                !formattingContext.inCodeBlock &&
+                !formattingContext.inFrontmatter &&
+                !formattingContext.inTable
+              ) {
+                event.preventDefault();
+                currentView.dispatch(currentView.state.replaceSelection(tabularMarkdown));
+                return true;
+              }
+
               const html = event.clipboardData?.getData("text/html") ?? "";
               if (!html.trim()) {
                 return false;
@@ -4790,6 +5055,9 @@ export function useCodeMirror({
     }
 
     return () => {
+      if (revisionRef.current !== cleanRevisionRef.current) {
+        void onSaveRequestedRef.current?.(view.state.doc.toString());
+      }
       cancelPendingSessionUpdates();
       view.destroy();
       viewRef.current = null;
@@ -5553,7 +5821,8 @@ async function getClipboardTurndownService() {
   }
 
   clipboardTurndownServicePromise ??= import("turndown")
-    .then(({ default: TurndownService }) => {
+    .then(async ({ default: TurndownService }) => {
+      const { tables } = await import("turndown-plugin-gfm");
       clipboardTurndownService = new TurndownService({
         bulletListMarker: "-",
         codeBlockStyle: "fenced",
@@ -5562,6 +5831,7 @@ async function getClipboardTurndownService() {
         linkStyle: "inlined",
         strongDelimiter: "**",
       });
+      clipboardTurndownService.use(tables);
       return clipboardTurndownService;
     })
     .catch((error) => {
@@ -5589,6 +5859,45 @@ export async function convertClipboardHtmlToMarkdown(html: string, plainTextFall
   }
 
   return markdownText;
+}
+
+export function convertTabularPlainTextToMarkdown(plainText: string) {
+  const normalized = plainText.replace(/\r\n/g, "\n").replace(/\r/g, "\n").trim();
+  if (!normalized.includes("\t")) {
+    return null;
+  }
+
+  const rows = normalized
+    .split("\n")
+    .map((line) => line.split("\t").map((cell) => sanitizeMarkdownTableCell(cell)))
+    .filter((row) => row.some((cell) => cell.trim().length > 0));
+  if (rows.length < 2) {
+    return null;
+  }
+
+  const columnCount = Math.max(...rows.map((row) => row.length));
+  if (columnCount < 2) {
+    return null;
+  }
+
+  const paddedRows = rows.map((row) => {
+    const nextRow = [...row];
+    while (nextRow.length < columnCount) {
+      nextRow.push("");
+    }
+    return nextRow;
+  });
+  const [headerRow, ...bodyRows] = paddedRows;
+  const delimiterRow = Array.from({ length: columnCount }, () => "---");
+  const serializeRow = (row: string[]) => `| ${row.join(" | ")} |`;
+
+  return [serializeRow(headerRow), serializeRow(delimiterRow), ...bodyRows.map(serializeRow)].join(
+    "\n",
+  );
+}
+
+function sanitizeMarkdownTableCell(value: string) {
+  return value.replace(/\n/g, " ").replace(/\|/g, "\\|").trim();
 }
 
 export function toggleMarkdownInlineStyle(view: EditorView, marker: "*" | "**") {

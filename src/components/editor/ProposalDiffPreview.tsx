@@ -1,3 +1,4 @@
+import { memo, useMemo } from "react";
 import { parseUnifiedDiff, type DiffLineKind } from "../../lib/diff";
 
 interface ProposalDiffPreviewProps {
@@ -8,14 +9,14 @@ interface ProposalDiffPreviewProps {
   onEditableTextChange?: (value: string) => void;
 }
 
-export function ProposalDiffPreview({
+export const ProposalDiffPreview = memo(function ProposalDiffPreview({
   diffText,
   editableLabel = "Edited proposal text",
   editableText,
   isEditable = false,
   onEditableTextChange,
 }: ProposalDiffPreviewProps) {
-  const parsedDiff = parseUnifiedDiff(diffText);
+  const parsedDiff = useMemo(() => parseUnifiedDiff(diffText), [diffText]);
   const editablePane =
     isEditable && editableText !== undefined ? (
       <label className="proposal-edit-pane">
@@ -97,7 +98,7 @@ export function ProposalDiffPreview({
       {editablePane}
     </div>
   );
-}
+});
 
 function formatLineNumber(value: number | null) {
   return value === null ? "" : value.toString();

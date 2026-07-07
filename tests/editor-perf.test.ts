@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
+import { readFileSync } from "fs";
+import { join } from "path";
 import { EditorState } from "@codemirror/state";
 import { markdown } from "@codemirror/lang-markdown";
+import { Table } from "@lezer/markdown";
 import { resolveThreadAnchors } from "../src/lib/anchorResolution";
 import {
   buildReadableMarkdownDecorations,
@@ -12,7 +15,9 @@ import { buildProposalReviewDecorationSet } from "../src/components/editor/cm/pr
 import type { ReviewChangeSet, ReviewHunk } from "../src/types/proposal";
 import {
   createFootnoteHeavyScenario,
+  createGiantTableDocument,
   createLargePlainDocument,
+  createManyTablesDocument,
   createManyThreadScenario,
 } from "./perfFixtures";
 
@@ -23,15 +28,24 @@ interface PerfReportEntry {
   p95Ms: number;
 }
 
+interface PerfBaselineEntry {
+  medianMs: number;
+}
+
+const PERF_GATE_MULTIPLIER = 1.25;
+const SHOULD_GATE_PERF = process.env.MARGENT_PERF_GATE === "1";
+
 describe("editor perf report", () => {
   it("prints repeatable hot-path timings", () => {
     const largePlain = createLargePlainDocument();
     const manyThread = createManyThreadScenario();
     const footnoteHeavy = createFootnoteHeavyScenario();
+    const manyTables = createManyTablesDocument();
+    const giantTable = createGiantTableDocument();
     const oneHundredHunks = createProposalHunkScenario(100);
     const fiveHundredHunks = createProposalHunkScenario(500);
 
-    const markdownExtensions = [markdown()];
+    const markdownExtensions = [markdown({ extensions: [Table] })];
     const largePlainState = EditorState.create({ doc: largePlain, extensions: markdownExtensions });
     const manyThreadState = EditorState.create({
       doc: manyThread.content,
@@ -40,6 +54,14 @@ describe("editor perf report", () => {
     const manyThreadPresentation = buildThreadPresentation(manyThread.threads, manyThreadState);
     const footnoteState = EditorState.create({
       doc: footnoteHeavy.content,
+      extensions: markdownExtensions,
+    });
+    const manyTablesState = EditorState.create({
+      doc: manyTables,
+      extensions: markdownExtensions,
+    });
+    const giantTableState = EditorState.create({
+      doc: giantTable,
       extensions: markdownExtensions,
     });
     const oneHundredHunkState = EditorState.create({
@@ -159,6 +181,32 @@ describe("editor perf report", () => {
           "rendered",
         );
       }),
+      runMeasured("buildRenderedMarkdownDecorations many-tables", 16, () => {
+        const freshState = manyTablesState.update({}).state;
+        buildRenderedMarkdownDecorations(
+          freshState,
+          [
+            {
+              from: 0,
+              to: freshState.doc.length,
+            },
+          ],
+          "rendered",
+        );
+      }),
+      runMeasured("buildRenderedMarkdownDecorations giant-table", 8, () => {
+        const freshState = giantTableState.update({}).state;
+        buildRenderedMarkdownDecorations(
+          freshState,
+          [
+            {
+              from: 0,
+              to: freshState.doc.length,
+            },
+          ],
+          "rendered",
+        );
+      }),
       runMeasured("buildProposalReviewDecorations 100 hunks", 24, () => {
         buildProposalReviewDecorationSet(
           {
@@ -188,6 +236,8 @@ describe("editor perf report", () => {
           footnoteChars: footnoteHeavy.content.length,
           footnoteThreads: footnoteHeavy.threads.length,
           largePlainChars: largePlain.length,
+          giantTableChars: giantTable.length,
+          manyTablesChars: manyTables.length,
           manyThreadChars: manyThread.content.length,
           manyThreadThreads: manyThread.threads.length,
           proposalHunksLarge: fiveHundredHunks.changeSet.hunks.length,
@@ -206,15 +256,39 @@ describe("editor perf report", () => {
       })),
     );
 
-    expect(reports).toHaveLength(13);
+    expect(reports).toHaveLength(15);
     for (const report of reports) {
       expect(Number.isFinite(report.medianMs)).toBe(true);
       expect(Number.isFinite(report.p95Ms)).toBe(true);
       expect(report.medianMs).toBeGreaterThanOrEqual(0);
       expect(report.p95Ms).toBeGreaterThanOrEqual(report.medianMs);
     }
+    if (SHOULD_GATE_PERF) {
+      assertPerfBaselines(reports);
+    }
   }, 30_000);
 });
+
+function assertPerfBaselines(reports: PerfReportEntry[]) {
+  const baselinePath = join(process.cwd(), "tests", "PERF_BASELINE.json");
+  const baselines = JSON.parse(readFileSync(baselinePath, "utf8")) as Record<
+    string,
+    PerfBaselineEntry
+  >;
+  const missingBaselines = reports
+    .map((report) => report.label)
+    .filter((label) => !baselines[label]);
+  expect(missingBaselines).toEqual([]);
+
+  for (const report of reports) {
+    const baseline = baselines[report.label];
+    const ceiling = baseline.medianMs * PERF_GATE_MULTIPLIER;
+    expect(
+      report.medianMs,
+      `${report.label} median ${report.medianMs.toFixed(3)}ms exceeded perf gate ${ceiling.toFixed(3)}ms`,
+    ).toBeLessThanOrEqual(ceiling);
+  }
+}
 
 function createProposalHunkScenario(hunkCount: number): {
   changeSet: ReviewChangeSet;

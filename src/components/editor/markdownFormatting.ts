@@ -2,6 +2,10 @@ import { syntaxTree } from "@codemirror/language";
 import { EditorState, type ChangeSpec } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
 import type { SyntaxNode } from "@lezer/common";
+import {
+  findMarkdownTableRangeAt,
+  findMarkdownTableRangeAtLine,
+} from "./markdownTable";
 
 export type MarkdownInlineMarker = "*" | "**" | "~~" | "`";
 export type MarkdownListType = "bullet" | "ordered" | "task";
@@ -61,8 +65,6 @@ const TASK_LIST_PATTERN = /^(\s*)([-+*]|\d+[.)])\s+\[([ xX])\]\s+/;
 const CODE_FENCE_PATTERN = /^\s*(`{3,}|~{3,})/;
 const FRONTMATTER_BOUNDARY_PATTERN = /^(---|\.\.\.)\s*$/;
 const FOOTNOTE_REFERENCE_PATTERN = /\[\^(\d+)\]/g;
-const TABLE_DIVIDER_PATTERN = /^\s*\|?(?:\s*:?-{3,}:?\s*\|)+\s*:?-{3,}:?\s*\|?\s*$/;
-const TABLE_ROW_PATTERN = /\|/;
 
 export function runMarkdownFormattingCommand(
   view: EditorView,
@@ -414,64 +416,6 @@ export function insertMarkdownTable(view: EditorView, rows = 3, columns = 3) {
   return true;
 }
 
-export interface MarkdownTableRange {
-  endLine: number;
-  from: number;
-  startLine: number;
-  to: number;
-}
-
-export function findMarkdownTableRangeAt(state: EditorState, position: number): MarkdownTableRange | null {
-  const line = state.doc.lineAt(position);
-  return findMarkdownTableRangeAtLine(state, line.number);
-}
-
-export function findMarkdownTableRangeAtLine(state: EditorState, lineNumber: number): MarkdownTableRange | null {
-  for (const range of collectMarkdownTableRanges(state)) {
-    if (lineNumber >= range.startLine && lineNumber <= range.endLine) {
-      return range;
-    }
-  }
-  return null;
-}
-
-export function collectMarkdownTableRanges(state: EditorState) {
-  const ranges: MarkdownTableRange[] = [];
-  let line = state.doc.line(1);
-
-  while (line.number < state.doc.lines) {
-    const nextLine = state.doc.line(line.number + 1);
-    if (looksLikeMarkdownTableHeader(line.text) && TABLE_DIVIDER_PATTERN.test(nextLine.text)) {
-      let endLine = nextLine;
-      let cursorLineNumber = nextLine.number + 1;
-      while (cursorLineNumber <= state.doc.lines) {
-        const candidate = state.doc.line(cursorLineNumber);
-        if (!looksLikeMarkdownTableRow(candidate.text)) {
-          break;
-        }
-        endLine = candidate;
-        cursorLineNumber += 1;
-      }
-
-      ranges.push({
-        endLine: endLine.number,
-        from: line.from,
-        startLine: line.number,
-        to: endLine.to,
-      });
-      line = endLine.number < state.doc.lines ? state.doc.line(endLine.number + 1) : endLine;
-      if (line.number === endLine.number) {
-        break;
-      }
-      continue;
-    }
-
-    line = state.doc.line(line.number + 1);
-  }
-
-  return ranges;
-}
-
 function toggleSelectedTextInlineStyle(selectedText: string, marker: string) {
   const markerLength = marker.length;
   if (selectedText.startsWith(marker) && selectedText.endsWith(marker) && selectedText.length >= markerLength * 2) {
@@ -668,14 +612,4 @@ function nextFootnoteLabel(content: string) {
 
 function tableRow(cells: string[]) {
   return `| ${cells.join(" | ")} |`;
-}
-
-function looksLikeMarkdownTableHeader(text: string) {
-  const trimmed = text.trim();
-  const pipeCount = (trimmed.match(/\|/g) ?? []).length;
-  return pipeCount >= 2 || trimmed.startsWith("|") || trimmed.endsWith("|");
-}
-
-function looksLikeMarkdownTableRow(text: string) {
-  return text.trim().length > 0 && TABLE_ROW_PATTERN.test(text);
 }

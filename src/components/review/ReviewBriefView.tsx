@@ -13,6 +13,7 @@ interface ReviewBriefViewProps {
   onRefresh: () => Promise<void>;
   onRejectProposal: (proposalId: string) => Promise<void>;
   onReplyToThread: (threadId: string, body: string) => Promise<void>;
+  resolvedEntries: ReviewBriefEntry[];
   resolvedCount: number;
 }
 
@@ -27,6 +28,7 @@ export const ReviewBriefView = memo(function ReviewBriefView({
   onRefresh,
   onRejectProposal,
   onReplyToThread,
+  resolvedEntries,
   resolvedCount,
 }: ReviewBriefViewProps) {
   return (
@@ -73,10 +75,45 @@ export const ReviewBriefView = memo(function ReviewBriefView({
 
       <details className="review-brief-resolved">
         <summary>Resolved ({resolvedCount})</summary>
+        {resolvedEntries.length ? (
+          <div className="review-brief-resolved-list">
+            {resolvedEntries.map((entry) =>
+              entry.thread ? (
+                <button
+                  className="review-brief-resolved-item"
+                  key={entry.id}
+                  onClick={() => void onOpenThread(entry.document.relativePath, entry.thread!.id)}
+                  type="button"
+                >
+                  <span>{entry.thread.title || "Resolved thread"}</span>
+                  <small>
+                    {entry.document.relativePath}
+                    {entry.updatedAt ? ` · ${formatReviewBriefDate(entry.updatedAt)}` : ""}
+                  </small>
+                </button>
+              ) : null,
+            )}
+          </div>
+        ) : (
+          <p className="thread-helper-text">No resolved threads in this workspace.</p>
+        )}
       </details>
     </section>
   );
 });
+
+function formatReviewBriefDate(value: string) {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return value;
+  }
+
+  return date.toLocaleDateString(undefined, {
+    day: "numeric",
+    month: "short",
+    year: "numeric",
+  });
+}
 
 const ReviewBriefProposalCard = memo(function ReviewBriefProposalCard({
   activeActionId,

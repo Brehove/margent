@@ -19,6 +19,10 @@ import {
 } from "./lib/appMenuCommands";
 import { getErrorMessage } from "./lib/errorMessage";
 import { invokeBackend, isDesktopBackend, listenBackend } from "./lib/backend";
+import {
+  flushActiveEditorDraft,
+  type ActiveEditorFlushResult,
+} from "./lib/activeEditorFlush";
 import { useProposals } from "./hooks/useProposals";
 import { useReviewBrief } from "./hooks/useReviewBrief";
 import { useReviewData } from "./hooks/useReviewData";
@@ -90,6 +94,14 @@ function safeUnlisten(unlisten: () => void | Promise<void>) {
   }
 }
 
+function isInProgressStatusMessage(message: string) {
+  return (
+    message.startsWith("Checking") ||
+    message.startsWith("Downloading") ||
+    message.startsWith("Installing")
+  );
+}
+
 interface EditorNavigationRequest {
   id: number;
   line: number;
@@ -147,7 +159,7 @@ function App() {
   const workspace = useWorkspaceStore((state) => state.workspace);
   const workspaceLabel = workspace ? getLastPathSegment(workspace.rootPath) : null;
   const topbarContext = workspaceLabel ? `${workspaceLabel} workspace` : "Rendered-first markdown review";
-  const recentWorkspaces = readRecentWorkspaces();
+  const [recentWorkspaces, setRecentWorkspaces] = useState(() => readRecentWorkspaces());
   const [appView, setAppView] = useState<AppView>("editor");
   const [editorNavigationRequest, setEditorNavigationRequest] =
     useState<EditorNavigationRequest | null>(null);
@@ -160,7 +172,9 @@ function App() {
   const [providerReadiness, setProviderReadiness] = useState<ProviderReadiness[]>([]);
   const [providerReadinessError, setProviderReadinessError] = useState<string | null>(null);
   const [reviewPasses, setReviewPasses] = useState<ReviewPassSummary[]>([]);
+  const closeAfterFlushRef = useRef(false);
   const focusChromeFadeTimeoutRef = useRef<number | null>(null);
+  const recentMenuRef = useRef<HTMLDivElement | null>(null);
   const reviewDataState = useReviewData({
     activeDocument,
     workspace,
@@ -208,9 +222,32 @@ function App() {
       streamedText: "",
     });
 
-  const handleEditorSave = useCallback((content: string) => {
-    void saveCurrentDocument(content);
+  const handleEditorSave = useCallback((content: string) => saveCurrentDocument(content), []);
+
+  const refreshRecentWorkspaces = useCallback(() => {
+    setRecentWorkspaces(readRecentWorkspaces());
   }, []);
+
+  const switchAppView = useCallback(
+    async (nextView: AppView | ((current: AppView) => AppView)) => {
+      const resolvedView =
+        typeof nextView === "function" ? nextView(appView) : nextView;
+      if (resolvedView === appView) {
+        return true;
+      }
+
+      if (appView === "editor" && resolvedView !== "editor") {
+        const flushResult = await flushActiveEditorDraft();
+        if (flushResult === "blocked" || flushResult === "conflict" || flushResult === "error") {
+          return false;
+        }
+      }
+
+      setAppView(resolvedView);
+      return true;
+    },
+    [appView],
+  );
 
   const loadProviderReadiness = useCallback(async () => {
     if (!isDesktopBackend()) {
@@ -260,8 +297,142 @@ function App() {
   }, [saveConflict]);
 
   useEffect(() => {
+    const title = activeDocument
+      ? `${isEditorDirty ? "• " : ""}${activeDocument.displayName} — Margent`
+      : workspaceLabel
+        ? `${workspaceLabel} — Margent`
+        : "Margent";
+
+    if (!isDesktopBackend()) {
+      document.title = title;
+      return;
+    }
+
+    let cancelled = false;
+    void import("@tauri-apps/api/window").then(({ getCurrentWindow }) => {
+      if (!cancelled) {
+        void getCurrentWindow().setTitle(title);
+      }
+    });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [activeDocument?.displayName, isEditorDirty, workspaceLabel]);
+
+  useEffect(() => {
+    if (!isDesktopBackend()) {
+      return;
+    }
+
+    let cancelled = false;
+    let unlisten: (() => void) | null = null;
+
+    void import("@tauri-apps/api/window").then(({ getCurrentWindow }) => {
+      if (cancelled) {
+        return;
+      }
+
+      const currentWindow = getCurrentWindow();
+      void currentWindow
+        .onCloseRequested(async (event) => {
+          if (closeAfterFlushRef.current || !useWorkspaceStore.getState().isEditorDirty) {
+            return;
+          }
+
+          event.preventDefault();
+          const flushResult = await flushActiveEditorDraft();
+          if (flushResult === "blocked" || flushResult === "conflict" || flushResult === "error") {
+            return;
+          }
+
+          closeAfterFlushRef.current = true;
+          await currentWindow.close();
+        })
+        .then((nextUnlisten) => {
+          if (cancelled) {
+            safeUnlisten(nextUnlisten);
+            return;
+          }
+          unlisten = nextUnlisten;
+        });
+    });
+
+    return () => {
+      cancelled = true;
+      if (unlisten) {
+        safeUnlisten(unlisten);
+      }
+    };
+  }, []);
+
+  useEffect(() => {
     void loadProviderReadiness();
   }, [loadProviderReadiness]);
+
+  useEffect(() => {
+    if (!exportStatusMessage || isInProgressStatusMessage(exportStatusMessage)) {
+      return;
+    }
+
+    const timeout = window.setTimeout(() => {
+      setExportStatusMessage(null);
+    }, 6000);
+    return () => window.clearTimeout(timeout);
+  }, [exportStatusMessage]);
+
+  useEffect(() => {
+    if (!isRecentMenuOpen) {
+      return;
+    }
+
+    const menuElement = recentMenuRef.current;
+    const focusMenuButton = (delta: number) => {
+      const buttons = Array.from(
+        menuElement?.querySelectorAll<HTMLButtonElement>('[role="menuitem"]') ?? [],
+      ).filter((button) => !button.disabled);
+      if (buttons.length === 0) {
+        return;
+      }
+
+      const currentIndex = buttons.findIndex((button) => button === document.activeElement);
+      const nextIndex =
+        currentIndex === -1
+          ? delta > 0
+            ? 0
+            : buttons.length - 1
+          : (currentIndex + delta + buttons.length) % buttons.length;
+      buttons[nextIndex]?.focus();
+    };
+    const handlePointerDown = (event: MouseEvent) => {
+      if (menuElement && event.target instanceof Node && !menuElement.contains(event.target)) {
+        setIsRecentMenuOpen(false);
+      }
+    };
+    const handleKeydown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        setIsRecentMenuOpen(false);
+        return;
+      }
+      if (event.key === "ArrowDown") {
+        event.preventDefault();
+        focusMenuButton(1);
+        return;
+      }
+      if (event.key === "ArrowUp") {
+        event.preventDefault();
+        focusMenuButton(-1);
+      }
+    };
+
+    document.addEventListener("mousedown", handlePointerDown, true);
+    window.addEventListener("keydown", handleKeydown, true);
+    return () => {
+      document.removeEventListener("mousedown", handlePointerDown, true);
+      window.removeEventListener("keydown", handleKeydown, true);
+    };
+  }, [isRecentMenuOpen]);
 
   useEffect(() => {
     let isCancelled = false;
@@ -367,19 +538,24 @@ function App() {
         event.shiftKey &&
         !event.altKey &&
         normalizedKey === "f";
-      if (!isPaletteShortcut && !isProjectSearchShortcut) {
+      const isFocusModeShortcut =
+        isCommandModifier &&
+        event.altKey &&
+        !event.shiftKey &&
+        normalizedKey === "f";
+      if (!isPaletteShortcut && !isProjectSearchShortcut && !isFocusModeShortcut) {
         return;
       }
 
       event.preventDefault();
-      if (isProjectSearchShortcut) {
-        if (activeDocument && isEditorEventTarget(event.target)) {
-          toggleFocusMode();
-          return;
-        }
+      if (isFocusModeShortcut) {
+        toggleFocusMode();
+        return;
+      }
 
+      if (isProjectSearchShortcut) {
         if (workspace) {
-          setAppView("project-search");
+          void switchAppView("project-search");
         }
         return;
       }
@@ -391,7 +567,7 @@ function App() {
     return () => {
       window.removeEventListener("keydown", handleKeydown, true);
     };
-  }, [activeDocument, toggleFocusMode, workspace]);
+  }, [switchAppView, toggleFocusMode, workspace]);
 
   const handleFocusModeTypingActivity = useCallback(() => {
     if (!useUiStore.getState().isFocusModeEnabled) {
@@ -681,7 +857,7 @@ function App() {
         keywords: ["source", "editor"],
       },
       {
-        detail: activeDocument ? "Cmd+Shift+F in the editor" : "Open a document first",
+        detail: activeDocument ? "Option+Cmd+F" : "Open a document first",
         disabled: !activeDocument,
         id: "toggle-focus-mode",
         label: isFocusModeEnabled ? "Turn Off Focus Mode" : "Focus Mode",
@@ -776,7 +952,7 @@ function App() {
 
   const openRecentWorkspace = useCallback(
     async (index: number) => {
-      const recent = readRecentWorkspaces()[index];
+      const recent = recentWorkspaces[index];
       if (!recent) {
         return;
       }
@@ -786,8 +962,9 @@ function App() {
       await openWorkspacePath(recent.openedPath ?? recent.rootPath, {
         preferredRelativePath: recent.activeRelativePath,
       });
+      refreshRecentWorkspaces();
     },
-    [],
+    [recentWorkspaces, refreshRecentWorkspaces],
   );
 
   const runDocumentExport = useCallback(
@@ -995,17 +1172,20 @@ function App() {
         void openFolderWorkspace();
         break;
       case "project-search":
-        setAppView("project-search");
+        void switchAppView("project-search");
         break;
       case "providers":
-        setAppView("providers");
-        void loadProviderReadiness();
+        void switchAppView("providers").then((didSwitch) => {
+          if (didSwitch) {
+            void loadProviderReadiness();
+          }
+        });
         break;
       case "refresh-files":
         void refreshWorkspaceFiles();
         break;
       case "review-brief":
-        setAppView("review-brief");
+        void switchAppView("review-brief");
         break;
       case "rename-active-file": {
         if (!activeDocument) {
@@ -1037,6 +1217,7 @@ function App() {
     requestFileAction,
     runDocumentExport,
     runPdfExport,
+    switchAppView,
   ]);
 
   const handleAppMenuCommand = useCallback(
@@ -1075,6 +1256,7 @@ function App() {
           void openFileWorkspace();
           break;
         case APP_MENU_COMMANDS.openRecent:
+          refreshRecentWorkspaces();
           setIsRecentMenuOpen(true);
           break;
         case APP_MENU_COMMANDS.projectSearch:
@@ -1617,44 +1799,50 @@ function App() {
           </button>
           {workspace ? (
             <button
-              aria-pressed={appView === "project-search"}
-              className="ghost-button topbar-button"
-              onClick={() => setAppView("project-search")}
+	              aria-pressed={appView === "project-search"}
+	              className="ghost-button topbar-button"
+	              onClick={() => void switchAppView("project-search")}
             >
               Search
             </button>
           ) : null}
           {workspace ? (
             <button
-              aria-pressed={appView === "review-brief"}
-              className="ghost-button topbar-button"
-              onClick={() => {
-                setAppView((current) =>
-                  current === "review-brief" ? "editor" : "review-brief",
-                );
-              }}
+	              aria-pressed={appView === "review-brief"}
+	              className="ghost-button topbar-button"
+	              onClick={() => {
+	                void switchAppView((current) =>
+	                  current === "review-brief" ? "editor" : "review-brief",
+	                );
+	              }}
             >
               Review Brief
             </button>
           ) : null}
           <button
-            aria-pressed={appView === "providers"}
-            className="ghost-button topbar-button"
-            onClick={() => {
-              setAppView((current) => (current === "providers" ? "editor" : "providers"));
-              if (appView !== "providers") {
-                void loadProviderReadiness();
-              }
-            }}
+	              aria-pressed={appView === "providers"}
+	              className="ghost-button topbar-button"
+	              onClick={() => {
+	                void switchAppView((current) =>
+	                  current === "providers" ? "editor" : "providers",
+	                ).then((didSwitch) => {
+	                  if (didSwitch && appView !== "providers") {
+	                    void loadProviderReadiness();
+	                  }
+	                });
+	              }}
           >
             Providers
           </button>
           {recentWorkspaces.length ? (
-            <div className="topbar-recent">
+            <div className="topbar-recent" ref={recentMenuRef}>
               <button
                 aria-expanded={isRecentMenuOpen}
                 className="ghost-button topbar-button"
-                onClick={() => setIsRecentMenuOpen((current) => !current)}
+                onClick={() => {
+                  refreshRecentWorkspaces();
+                  setIsRecentMenuOpen((current) => !current);
+                }}
                 type="button"
               >
                 Open Recent
@@ -1700,7 +1888,11 @@ function App() {
         </div>
       </header>
 
-      {errorMessage ? <div className="banner error-banner">{errorMessage}</div> : null}
+      {errorMessage ? (
+        <div className="banner error-banner" role="alert">
+          {errorMessage}
+        </div>
+      ) : null}
       {saveConflict ? (
         <SaveConflictBanner
           conflict={saveConflict}
@@ -1712,7 +1904,17 @@ function App() {
         />
       ) : null}
       {exportStatusMessage ? (
-        <div className="banner info-banner">{exportStatusMessage}</div>
+        <div aria-live="polite" className="banner info-banner" role="status">
+          <span>{exportStatusMessage}</span>
+          <button
+            aria-label="Dismiss status"
+            className="ghost-button banner-dismiss-button"
+            onClick={() => setExportStatusMessage(null)}
+            type="button"
+          >
+            Dismiss
+          </button>
+        </div>
       ) : null}
 
       {commandPaletteMode ? (
@@ -1779,10 +1981,12 @@ function App() {
                 onRefresh={reviewBriefState.loadBrief}
                 onRejectProposal={reviewBriefState.rejectProposal}
                 onReplyToThread={reviewBriefState.replyToThread}
+                resolvedEntries={reviewBriefState.resolvedEntries}
                 resolvedCount={reviewBriefState.resolvedCount}
               />
             ) : appView === "project-search" ? (
               <ProjectSearchView
+                key={workspace.rootPath}
                 onOpenResult={openProjectSearchResult}
                 workspaceRoot={workspace.rootPath}
               />
@@ -1845,8 +2049,11 @@ function App() {
               <button
                 className="empty-state-link-button"
                 onClick={() => {
-                  setAppView("providers");
-                  void loadProviderReadiness();
+                  void switchAppView("providers").then((didSwitch) => {
+                    if (didSwitch) {
+                      void loadProviderReadiness();
+                    }
+                  });
                 }}
                 type="button"
               >
@@ -2008,7 +2215,7 @@ const EditorPane = memo(function EditorPane({
     instruction: string,
     passName: string | null,
   ) => Promise<void>;
-  onSave: (content: string) => void;
+  onSave: (content: string) => Promise<ActiveEditorFlushResult>;
   onThreadSelect: (threadId: string | null) => void;
   providerActionState: ProviderActionState;
   providerDocumentActionState: ProviderDocumentActionState;
@@ -2160,12 +2367,4 @@ function createRunId() {
   }
 
   return `run-${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
-}
-
-function isEditorEventTarget(target: EventTarget | null) {
-  if (!(target instanceof Element)) {
-    return false;
-  }
-
-  return Boolean(target.closest(".cm-editor, .code-editor-host"));
 }

@@ -1,5 +1,7 @@
 import { EditorState } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
+import { markdown } from "@codemirror/lang-markdown";
+import { Table } from "@lezer/markdown";
 import { describe, expect, it, vi } from "vitest";
 import {
   getMarkdownTableContext,
@@ -16,8 +18,11 @@ function createView(doc: string, selectionText: string) {
   }
 
   return new EditorView({
-    doc,
-    selection: { anchor },
+    state: EditorState.create({
+      doc,
+      extensions: [markdown({ extensions: [Table] })],
+      selection: { anchor },
+    }),
   });
 }
 
@@ -30,6 +35,7 @@ describe("markdown table editing helpers", () => {
     ].join("\n");
     const state = EditorState.create({
       doc,
+      extensions: [markdown({ extensions: [Table] })],
       selection: { anchor: doc.indexOf("pipe") },
     });
 
@@ -41,7 +47,7 @@ describe("markdown table editing helpers", () => {
     expect(context?.columnCount).toBe(2);
   });
 
-  it("pads ragged rows when inserting a column", () => {
+  it("inserts a compact column cell without padding untouched ragged cells", () => {
     const doc = [
       "| A | B |",
       "| --- | --- |",
@@ -54,9 +60,9 @@ describe("markdown table editing helpers", () => {
 
     expect(view.state.doc.toString()).toBe(
       [
-        "| A |  | B |  |",
-        "| --- | --- | --- | --- |",
-        "| one |  |  |  |",
+        "| A |  | B |",
+        "| --- | --- | --- |",
+        "| one |  |",
         "| two |  | escaped \\| pipe | extra |",
       ].join("\n"),
     );
@@ -89,7 +95,7 @@ describe("markdown table editing helpers", () => {
     const doc = normalizedDoc.replaceAll("\n", "\r\n");
     const state = EditorState.create({
       doc,
-      extensions: [EditorState.lineSeparator.of("\r\n")],
+      extensions: [EditorState.lineSeparator.of("\r\n"), markdown({ extensions: [Table] })],
       selection: { anchor: normalizedDoc.indexOf("1") },
     });
     const dispatch = vi.fn();
