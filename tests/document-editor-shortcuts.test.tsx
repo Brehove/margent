@@ -9,7 +9,12 @@ import {
 } from "../src/stores/uiStore";
 import type { CodeMirrorSession } from "../src/components/editor/useCodeMirror";
 import type { ProposalRecord } from "../src/types/proposal";
-import type { AnchorRecord, MessageRecord, ThreadRecord } from "../src/types/thread";
+import type {
+  AnchorRecord,
+  EditorSelectionSnapshot,
+  MessageRecord,
+  ThreadRecord,
+} from "../src/types/thread";
 import type { DocumentPayload } from "../src/types/workspace";
 
 const mockUseCodeMirror = vi.fn();
@@ -947,6 +952,94 @@ describe("DocumentEditor keyboard shortcuts", () => {
 
     expect(screen.getByText("Tighten the introduction.")).toBeInTheDocument();
     expect(screen.getByText("1 proposal")).toBeInTheDocument();
+  });
+
+  it("shows the new comment composer when selecting text over an active thread", () => {
+    const onThreadSelect = vi.fn();
+    let codeMirrorOptions:
+      | {
+          onSelectionChange?: (selection: EditorSelectionSnapshot | null) => void;
+        }
+      | null = null;
+
+    mockUseCodeMirror.mockImplementation((options) => {
+      codeMirrorOptions = options as typeof codeMirrorOptions;
+      return {
+        session: makeSession({ isDirty: vi.fn(() => false) }),
+        sessionMetrics: {
+          characterCount: 7,
+          lineCount: 2,
+        },
+        sessionSnapshot: {
+          isDirty: false,
+          revision: 0,
+        },
+        setHostElement: vi.fn(),
+      };
+    });
+
+    render(
+      <DocumentEditor
+        addReply={vi.fn(async () => {})}
+        createThreadFromSelection={vi.fn(async () => {})}
+        deleteThread={vi.fn(async () => {})}
+        document={makeDocumentPayload()}
+        isSaving={false}
+        isThreadSaving={false}
+        loadThread={vi.fn(async () => null)}
+        onDirtyChange={vi.fn()}
+        onSave={vi.fn()}
+        onThreadSelect={onThreadSelect}
+        reopenThread={vi.fn(async () => {})}
+        resolveThread={vi.fn(async () => {})}
+        selectedThreadId="thread-1"
+        threads={[makeThread()]}
+      />,
+    );
+
+    expect(screen.getByPlaceholderText("Comment...")).toBeInTheDocument();
+
+    const host = document.querySelector(".code-editor-host");
+    expect(host).toBeInstanceOf(HTMLElement);
+    const selectedTextNode = document.createTextNode("Selected passage");
+    host!.append(selectedTextNode);
+
+    const range = document.createRange();
+    range.setStart(selectedTextNode, 0);
+    range.setEnd(selectedTextNode, selectedTextNode.textContent?.length ?? 0);
+    Object.defineProperty(range, "getBoundingClientRect", {
+      value: () =>
+        ({
+          bottom: 24,
+          height: 24,
+          left: 0,
+          right: 160,
+          top: 0,
+          width: 160,
+          x: 0,
+          y: 0,
+          toJSON: () => ({}),
+        }) as DOMRect,
+    });
+    const domSelection = window.getSelection();
+    domSelection?.removeAllRanges();
+    domSelection?.addRange(range);
+
+    act(() => {
+      codeMirrorOptions?.onSelectionChange?.({
+        endColumn: 17,
+        endLine: 1,
+        endOffsetUtf16: 16,
+        quote: "Selected passage",
+        startColumn: 1,
+        startLine: 1,
+        startOffsetUtf16: 0,
+      });
+    });
+
+    expect(onThreadSelect).toHaveBeenCalledWith(null);
+    expect(screen.getByPlaceholderText("Leave a comment...")).toBeInTheDocument();
+    expect(screen.queryByPlaceholderText("Comment...")).not.toBeInTheDocument();
   });
 
   it("uses one thread composer for comments and provider instructions", async () => {

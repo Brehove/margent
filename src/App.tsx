@@ -172,7 +172,6 @@ function App() {
   const [providerReadiness, setProviderReadiness] = useState<ProviderReadiness[]>([]);
   const [providerReadinessError, setProviderReadinessError] = useState<string | null>(null);
   const [reviewPasses, setReviewPasses] = useState<ReviewPassSummary[]>([]);
-  const closeAfterFlushRef = useRef(false);
   const focusChromeFadeTimeoutRef = useRef<number | null>(null);
   const recentMenuRef = useRef<HTMLDivElement | null>(null);
   const reviewDataState = useReviewData({
@@ -319,52 +318,6 @@ function App() {
       cancelled = true;
     };
   }, [activeDocument?.displayName, isEditorDirty, workspaceLabel]);
-
-  useEffect(() => {
-    if (!isDesktopBackend()) {
-      return;
-    }
-
-    let cancelled = false;
-    let unlisten: (() => void) | null = null;
-
-    void import("@tauri-apps/api/window").then(({ getCurrentWindow }) => {
-      if (cancelled) {
-        return;
-      }
-
-      const currentWindow = getCurrentWindow();
-      void currentWindow
-        .onCloseRequested(async (event) => {
-          if (closeAfterFlushRef.current || !useWorkspaceStore.getState().isEditorDirty) {
-            return;
-          }
-
-          event.preventDefault();
-          const flushResult = await flushActiveEditorDraft();
-          if (flushResult === "blocked" || flushResult === "conflict" || flushResult === "error") {
-            return;
-          }
-
-          closeAfterFlushRef.current = true;
-          await currentWindow.close();
-        })
-        .then((nextUnlisten) => {
-          if (cancelled) {
-            safeUnlisten(nextUnlisten);
-            return;
-          }
-          unlisten = nextUnlisten;
-        });
-    });
-
-    return () => {
-      cancelled = true;
-      if (unlisten) {
-        safeUnlisten(unlisten);
-      }
-    };
-  }, []);
 
   useEffect(() => {
     void loadProviderReadiness();

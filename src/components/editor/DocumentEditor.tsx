@@ -396,6 +396,9 @@ export const DocumentEditor = memo(function DocumentEditor({
 
     createAnchorRectRef.current = rect;
     setCreateSelection(selection);
+    if (selectedThreadId) {
+      onThreadSelect(null);
+    }
   }
 
   function handleCreateLinkRequested(selection: EditorSelectionSnapshot) {
@@ -1447,9 +1450,9 @@ export const DocumentEditor = memo(function DocumentEditor({
           <span aria-hidden="true" className="comment-dock-resizer-handle" />
         </button>
         <CommentDock
-          activeThread={activeThread}
+          activeThread={createSelection ? null : activeThread}
           activeThreadCardRef={activeThreadCardRef}
-          activeThreadProposals={activeThreadProposals}
+          activeThreadProposals={createSelection ? [] : activeThreadProposals}
           createCardOffset={createCardOffset}
           createCardRef={createCardRef}
           createSelection={createSelection}
@@ -1464,7 +1467,7 @@ export const DocumentEditor = memo(function DocumentEditor({
           isDocumentAgentExpanded={isDocumentAgentExpanded}
           isDocumentOutlineVisible={isDocumentOutlineVisible}
           isDirty={isDirty}
-          isThreadExpanded={isActiveThreadExpanded}
+          isThreadExpanded={createSelection ? false : isActiveThreadExpanded}
           onAcceptProposal={onAcceptProposal}
           isThreadDetailLoading={isThreadDetailLoading}
           isThreadSaving={isThreadSaving}
