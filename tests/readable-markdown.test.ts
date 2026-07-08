@@ -11,6 +11,7 @@ import {
   buildFocusModeDecorations,
   buildReadableMarkdownDecorations,
   buildRenderedMarkdownDecorations,
+  buildRenderedMarkdownTableBlockDecorations,
   classifyReadableMarkdownLine,
   convertClipboardHtmlToMarkdown,
   convertTabularPlainTextToMarkdown,
@@ -19,6 +20,8 @@ import {
   pendingImageInsertionRangeField,
   readActiveFootnoteDefinition,
   readActiveMarkdownLink,
+  renderedMarkdownTableBlockField,
+  setEditorPresentationMode,
   toggleMarkdownInlineStyle,
 } from "../src/components/editor/useCodeMirror";
 
@@ -1002,7 +1005,7 @@ describe("buildRenderedMarkdownDecorations", () => {
     ).toHaveLength(1);
   });
 
-  it("renders active markdown tables as editable table widgets", () => {
+  it("replaces active markdown tables with editable block widgets", () => {
     const tableDoc = ["| name | link |", "| --- | --- |", "| item | [label](https://x.test) |"].join(
       "\n",
     );
@@ -1013,25 +1016,28 @@ describe("buildRenderedMarkdownDecorations", () => {
       selection: { anchor: 0 },
     });
 
-    const decorations = buildRenderedMarkdownDecorations(
+    const tableDecorations = buildRenderedMarkdownTableBlockDecorations(state, "rendered");
+    const renderedDecorations = buildRenderedMarkdownDecorations(
       state,
       [{ from: 0, to: state.doc.length }],
       "rendered",
     );
 
-    const widgets: string[] = [];
+    const tableWidgetRanges: Array<{ from: number; to: number; block: boolean }> = [];
     const hiddenRanges: string[] = [];
-    decorations.between(0, state.doc.length, (from, to, decoration) => {
+    tableDecorations.between(0, state.doc.length, (from, to, decoration) => {
+      if (getWidgetName(decoration.spec.widget) === "MarkdownTablePreviewWidget") {
+        tableWidgetRanges.push({ block: decoration.spec.block === true, from, to });
+      }
+    });
+    renderedDecorations.between(0, state.doc.length, (from, to, decoration) => {
       if (decoration.spec.class === "cm-md-syntax-hidden") {
         hiddenRanges.push(state.doc.sliceString(from, to));
       }
-      if (decoration.spec.widget) {
-        widgets.push(getWidgetName(decoration.spec.widget));
-      }
     });
 
-    expect(widgets).toContain("MarkdownTablePreviewWidget");
-    expect(hiddenRanges).toContain(tableDoc);
+    expect(tableWidgetRanges).toEqual([{ block: true, from: 0, to: tableDoc.length }]);
+    expect(hiddenRanges).not.toContain(tableDoc);
     expect(hiddenRanges.join("\n")).not.toContain("Trailing");
   });
 
@@ -1049,11 +1055,7 @@ describe("buildRenderedMarkdownDecorations", () => {
       selection: { anchor: doc.indexOf("Trailing") },
     });
 
-    const decorations = buildRenderedMarkdownDecorations(
-      state,
-      [{ from: 0, to: state.doc.length }],
-      "rendered",
-    );
+    const decorations = buildRenderedMarkdownTableBlockDecorations(state, "rendered");
 
     const widgets: string[] = [];
     decorations.between(0, state.doc.length, (from, to, decoration) => {
@@ -1063,6 +1065,68 @@ describe("buildRenderedMarkdownDecorations", () => {
     });
 
     expect(widgets).toContain("MarkdownTablePreviewWidget");
+  });
+
+  it("renders compact GFM tables as editable table widgets", () => {
+    const tableDoc = [
+      "|Tool action|What it means|Judgment question|",
+      "|---|---|---|",
+      "| Summarize | The tool reads and condenses material. | Is the material appropriate to share with this tool? |",
+      "| Connect | The tool receives access to an account, drive, inbox, calendar, browser, or folder. | What can it see now, and how do I revoke access later? |",
+    ].join("\n");
+    const doc = `Permissions range from very narrow to extremely broad.\n\n${tableDoc}\n\nPermission means more than consent.`;
+    const state = EditorState.create({
+      doc,
+      extensions: [markdownWithTables],
+      selection: { anchor: doc.indexOf("Permission means") },
+    });
+
+    const decorations = buildRenderedMarkdownTableBlockDecorations(state, "rendered");
+    const tableWidgetRanges: Array<{ from: number; to: number; block: boolean }> = [];
+    decorations.between(0, state.doc.length, (from, to, decoration) => {
+      if (getWidgetName(decoration.spec.widget) === "MarkdownTablePreviewWidget") {
+        tableWidgetRanges.push({ block: decoration.spec.block === true, from, to });
+      }
+    });
+
+    const tableFrom = doc.indexOf(tableDoc);
+    expect(tableWidgetRanges).toEqual([
+      { block: true, from: tableFrom, to: tableFrom + tableDoc.length },
+    ]);
+  });
+
+  it("rebuilds table block widgets when rendered mode is enabled", () => {
+    const doc = [
+      "|Tool action|What it means|Judgment question|",
+      "|---|---|---|",
+      "| Summarize | The tool reads and condenses material. | Is the material appropriate to share with this tool? |",
+    ].join("\n");
+    const state = EditorState.create({
+      doc,
+      extensions: [markdownWithTables, renderedMarkdownTableBlockField],
+    });
+
+    const rawWidgets: string[] = [];
+    state.field(renderedMarkdownTableBlockField).between(0, state.doc.length, (_from, _to, decoration) => {
+      if (decoration.spec.widget) {
+        rawWidgets.push(getWidgetName(decoration.spec.widget));
+      }
+    });
+    expect(rawWidgets).not.toContain("MarkdownTablePreviewWidget");
+
+    const renderedState = state.update({
+      effects: setEditorPresentationMode.of("rendered"),
+    }).state;
+    const renderedWidgets: string[] = [];
+    renderedState
+      .field(renderedMarkdownTableBlockField)
+      .between(0, renderedState.doc.length, (_from, _to, decoration) => {
+        if (decoration.spec.widget) {
+          renderedWidgets.push(getWidgetName(decoration.spec.widget));
+        }
+      });
+
+    expect(renderedWidgets).toContain("MarkdownTablePreviewWidget");
   });
 
   it("edits rendered table widget cells back into markdown source", () => {
@@ -1076,11 +1140,7 @@ describe("buildRenderedMarkdownDecorations", () => {
         extensions: [markdownWithTables],
       }),
     });
-    const decorations = buildRenderedMarkdownDecorations(
-      view.state,
-      [{ from: 0, to: view.state.doc.length }],
-      "rendered",
-    );
+    const decorations = buildRenderedMarkdownTableBlockDecorations(view.state, "rendered");
     let tableWidget: { toDOM(view: EditorView): HTMLElement } | null = null;
     decorations.between(0, view.state.doc.length, (_from, _to, decoration) => {
       if (getWidgetName(decoration.spec.widget) === "MarkdownTablePreviewWidget") {
@@ -1157,11 +1217,7 @@ describe("buildRenderedMarkdownDecorations", () => {
       selection: { anchor: doc.indexOf("Source-Grounded") },
     });
 
-    const decorations = buildRenderedMarkdownDecorations(
-      state,
-      [{ from: 0, to: state.doc.length }],
-      "rendered",
-    );
+    const decorations = buildRenderedMarkdownTableBlockDecorations(state, "rendered");
 
     const widgets: string[] = [];
     decorations.between(0, state.doc.length, (from, _to, decoration) => {

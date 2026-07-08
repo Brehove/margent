@@ -304,7 +304,7 @@ const markdownCodeLanguages = [
   }),
 ];
 
-const setEditorPresentationMode = StateEffect.define<EditorMode>();
+export const setEditorPresentationMode = StateEffect.define<EditorMode>();
 const editorGutterCompartment = new Compartment();
 const setEditorFocusMode = StateEffect.define<boolean>();
 
@@ -2708,15 +2708,7 @@ function collectRenderedMarkdownTableRanges(
       (visibleRange) => tableRange.from >= visibleRange.from && tableRange.from <= visibleRange.to,
     );
     if (canRenderPreview) {
-      const preview = buildMarkdownTablePreview(state, tableRange.from);
-      if (preview) {
-        ranges.push(
-          Decoration.widget({
-            side: -1,
-            widget: new MarkdownTablePreviewWidget(preview, tableRange.from, tableRange.to),
-          }).range(tableRange.from),
-        );
-        ranges.push(hiddenMarkdownSyntaxDecoration.range(tableRange.from, tableRange.to));
+      if (buildMarkdownTablePreview(state, tableRange.from)) {
         continue;
       }
     }
@@ -2738,6 +2730,65 @@ function collectRenderedMarkdownTableRanges(
 
   return ranges;
 }
+
+export function buildRenderedMarkdownTableBlockDecorations(
+  state: EditorState,
+  editorMode: EditorMode = getEditorPresentationMode(state),
+  isComposing = isEditorCompositionActive(state),
+): DecorationSet {
+  if (editorMode !== "rendered" || isComposing) {
+    return Decoration.none;
+  }
+
+  const ranges: Range<Decoration>[] = [];
+  for (const tableRange of collectMarkdownTableRanges(state)) {
+    const preview = buildMarkdownTablePreview(state, tableRange.from);
+    if (!preview) {
+      continue;
+    }
+
+    ranges.push(
+      Decoration.replace({
+        block: true,
+        widget: new MarkdownTablePreviewWidget(preview, tableRange.from, tableRange.to),
+      }).range(tableRange.from, tableRange.to),
+    );
+  }
+
+  return ranges.length > 0 ? Decoration.set(ranges, true) : Decoration.none;
+}
+
+export const renderedMarkdownTableBlockField = StateField.define<DecorationSet>({
+  create(state) {
+    return buildRenderedMarkdownTableBlockDecorations(state);
+  },
+  update(decorations, transaction) {
+    let editorMode = getEditorPresentationMode(transaction.startState);
+    let isComposing = isEditorCompositionActive(transaction.startState);
+    let shouldRebuild = transaction.docChanged;
+
+    for (const effect of transaction.effects) {
+      if (effect.is(setEditorPresentationMode)) {
+        editorMode = effect.value;
+        shouldRebuild = true;
+      } else if (effect.is(setEditorCompositionState)) {
+        isComposing = effect.value;
+        shouldRebuild = true;
+      }
+    }
+
+    if (shouldRebuild) {
+      return buildRenderedMarkdownTableBlockDecorations(
+        transaction.state,
+        editorMode,
+        isComposing,
+      );
+    }
+
+    return decorations;
+  },
+  provide: (field) => EditorView.decorations.from(field),
+});
 
 function buildMarkdownTablePreview(state: EditorState, position: number): MarkdownTablePreview | null {
   const model = getTableModelAt(state, position);
@@ -3166,7 +3217,7 @@ function getEditorViewportRangeRect(view: EditorView, from: number, to: number):
 }
 
 function getEditorPresentationMode(state: EditorState) {
-  return state.field(editorPresentationModeField);
+  return state.field(editorPresentationModeField, false) ?? "raw";
 }
 
 function isEditorCompositionActive(state: EditorState) {
@@ -3623,7 +3674,7 @@ const margentReadableTheme = EditorView.theme({
     display: "block",
     boxSizing: "border-box",
     width: "min(100%, calc(112ch + 64px))",
-    margin: "12px 0",
+    margin: "0",
     overflow: "hidden",
     border: "1.5px solid var(--editor-gutter-ink)",
     borderRadius: "5px",
@@ -3939,6 +3990,7 @@ const baseExtensions = [
   editorFocusModeField,
   editorCompositionStateField,
   editorPointerSelectionStateField,
+  renderedMarkdownTableBlockField,
   renderedMarkdownPlugin,
   focusModePlugin,
   EditorView.atomicRanges.of(
