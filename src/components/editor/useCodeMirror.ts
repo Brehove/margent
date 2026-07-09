@@ -312,7 +312,7 @@ function editorGutterExtensionsForMode(mode: EditorMode) {
   return mode === "raw" ? [lineNumbers(), highlightActiveLineGutter()] : [];
 }
 
-const editorPresentationModeField = StateField.define<EditorMode>({
+export const editorPresentationModeField = StateField.define<EditorMode>({
   create() {
     return "raw";
   },
@@ -2765,7 +2765,9 @@ export const renderedMarkdownTableBlockField = StateField.define<DecorationSet>(
   update(decorations, transaction) {
     let editorMode = getEditorPresentationMode(transaction.startState);
     let isComposing = isEditorCompositionActive(transaction.startState);
-    let shouldRebuild = transaction.docChanged;
+    let shouldRebuild =
+      transaction.docChanged ||
+      syntaxTree(transaction.startState) !== syntaxTree(transaction.state);
 
     for (const effect of transaction.effects) {
       if (effect.is(setEditorPresentationMode)) {

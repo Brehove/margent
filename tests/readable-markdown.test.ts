@@ -3,6 +3,7 @@ import { defaultKeymap } from "@codemirror/commands";
 import { EditorState, Prec } from "@codemirror/state";
 import { EditorView, keymap, runScopeHandlers } from "@codemirror/view";
 import { markdown } from "@codemirror/lang-markdown";
+import { forceParsing } from "@codemirror/language";
 import { Table } from "@lezer/markdown";
 import {
   buildMarkdownFootnoteDefinitionReplacement,
@@ -16,6 +17,7 @@ import {
   convertClipboardHtmlToMarkdown,
   convertTabularPlainTextToMarkdown,
   editorCompositionStateField,
+  editorPresentationModeField,
   importImageFileAtSelection,
   pendingImageInsertionRangeField,
   readActiveFootnoteDefinition,
@@ -32,6 +34,18 @@ function getWidgetName(widget: unknown) {
 }
 
 const markdownWithTables = markdown({ extensions: [Table] });
+
+function collectRenderedTableWidgetNames(state: EditorState) {
+  const widgets: string[] = [];
+  state
+    .field(renderedMarkdownTableBlockField)
+    .between(0, state.doc.length, (_from, _to, decoration) => {
+      if (decoration.spec.widget) {
+        widgets.push(getWidgetName(decoration.spec.widget));
+      }
+    });
+  return widgets;
+}
 
 describe("classifyReadableMarkdownLine", () => {
   it("classifies headings by level", () => {
@@ -1127,6 +1141,40 @@ describe("buildRenderedMarkdownDecorations", () => {
       });
 
     expect(renderedWidgets).toContain("MarkdownTablePreviewWidget");
+  });
+
+  it("renders tables discovered after the initial syntax parse completes", () => {
+    const tableDoc = [
+      "| Start with | Plain-language explanation |",
+      "| --- | --- |",
+      "| Asking ChatGPT for a draft | A chatbot returns text for a person to move elsewhere. |",
+    ].join("\n");
+    const doc = `${"Introductory prose. ".repeat(220)}\n\n${tableDoc}`;
+    const host = document.createElement("div");
+    document.body.append(host);
+    const view = new EditorView({
+      parent: host,
+      state: EditorState.create({
+        doc,
+        extensions: [
+          markdownWithTables,
+          editorPresentationModeField.init(() => "rendered"),
+          renderedMarkdownTableBlockField,
+        ],
+      }),
+    });
+
+    expect(collectRenderedTableWidgetNames(view.state)).not.toContain(
+      "MarkdownTablePreviewWidget",
+    );
+
+    expect(forceParsing(view, view.state.doc.length, 1_000)).toBe(true);
+    expect(collectRenderedTableWidgetNames(view.state)).toContain(
+      "MarkdownTablePreviewWidget",
+    );
+
+    view.destroy();
+    host.remove();
   });
 
   it("edits rendered table widget cells back into markdown source", () => {
