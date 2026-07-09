@@ -922,18 +922,7 @@ fn cmd_open(
     };
 
     if !print_only {
-        let mut command = process::Command::new("open");
-        if target_kind == "deep_link" {
-            command.arg(&target);
-        } else {
-            command.arg("-a").arg("Margent").arg(&target);
-        }
-        let status = command
-            .status()
-            .map_err(|error| format!("Unable to launch Margent with macOS open: {error}"))?;
-        if !status.success() {
-            return Err(format!("macOS open exited with status {status}."));
-        }
+        launch_margent_target(&target, target_kind)?;
     }
 
     if output.is_json() {
@@ -951,6 +940,94 @@ fn cmd_open(
         println!("Opened {target}");
     }
     Ok(())
+}
+
+#[cfg(target_os = "macos")]
+fn default_margent_app_bundle_candidates() -> Vec<PathBuf> {
+    let mut candidates = vec![PathBuf::from("/Applications/Margent.app")];
+    if let Ok(home) = env::var("HOME") {
+        candidates.push(PathBuf::from(home).join("Applications/Margent.app"));
+    }
+    candidates
+}
+
+#[cfg(any(target_os = "macos", test))]
+fn first_existing_margent_app_bundle(candidates: &[PathBuf]) -> Option<PathBuf> {
+    candidates.iter().find(|path| path.is_dir()).cloned()
+}
+
+#[cfg(target_os = "macos")]
+fn preferred_margent_app_bundle() -> Option<PathBuf> {
+    first_existing_margent_app_bundle(&default_margent_app_bundle_candidates())
+}
+
+fn run_open_command(mut command: process::Command, description: &str) -> Result<(), String> {
+    let status = command
+        .status()
+        .map_err(|error| format!("Unable to launch {description} with system open: {error}"))?;
+    if !status.success() {
+        return Err(format!(
+            "System open for {description} exited with status {status}."
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(target_os = "macos")]
+fn launch_margent_target(target: &str, target_kind: &str) -> Result<(), String> {
+    if target_kind == "deep_link" {
+        if let Some(app_bundle) = preferred_margent_app_bundle() {
+            let mut launch_app = process::Command::new("open");
+            launch_app.arg(app_bundle);
+            run_open_command(launch_app, "Margent app")?;
+        }
+
+        let mut open_link = process::Command::new("open");
+        open_link.arg(target);
+        run_open_command(open_link, "Margent deep link")?;
+    } else {
+        let mut open_file = process::Command::new("open");
+        if let Some(app_bundle) = preferred_margent_app_bundle() {
+            open_file.arg("-a").arg(app_bundle);
+        } else {
+            open_file.arg("-a").arg("Margent");
+        }
+        open_file.arg(target);
+        run_open_command(open_file, "Margent document")?;
+    }
+
+    force_margent_frontmost();
+    Ok(())
+}
+
+#[cfg(not(target_os = "macos"))]
+fn launch_margent_target(target: &str, target_kind: &str) -> Result<(), String> {
+    let mut command = process::Command::new("open");
+    if target_kind == "deep_link" {
+        command.arg(target);
+    } else {
+        command.arg("-a").arg("Margent").arg(target);
+    }
+    run_open_command(command, "Margent")
+}
+
+#[cfg(target_os = "macos")]
+fn force_margent_frontmost() {
+    let status = process::Command::new("osascript")
+        .arg("-e")
+        .arg(r#"tell application "System Events" to set frontmost of process "margent" to true"#)
+        .status();
+
+    if let Ok(status) = status {
+        if status.success() {
+            return;
+        }
+    }
+
+    let _ = process::Command::new("osascript")
+        .arg("-e")
+        .arg(r#"tell application "Margent" to activate"#)
+        .status();
 }
 
 // ── codify ──────────────────────────────────────────────────────────────────
@@ -3713,6 +3790,33 @@ mod tests {
         assert_eq!(document, "draft.md");
         assert_eq!(thread.as_deref(), Some("thread_123"));
         assert!(print_only);
+    }
+
+    #[test]
+    fn prefers_system_margent_app_bundle_before_user_bundle() {
+        let root = temp_root("margent_app_bundle_preference");
+        let system_bundle = root.join("Applications/Margent.app");
+        let user_bundle = root.join("Users/joel/Applications/Margent.app");
+        fs::create_dir_all(&system_bundle).expect("system bundle dir");
+        fs::create_dir_all(&user_bundle).expect("user bundle dir");
+
+        let selected =
+            first_existing_margent_app_bundle(&[system_bundle.clone(), user_bundle.clone()]);
+
+        assert_eq!(selected.as_deref(), Some(system_bundle.as_path()));
+    }
+
+    #[test]
+    fn falls_back_to_user_margent_app_bundle_when_system_bundle_is_absent() {
+        let root = temp_root("margent_app_bundle_user_fallback");
+        let system_bundle = root.join("Applications/Margent.app");
+        let user_bundle = root.join("Users/joel/Applications/Margent.app");
+        fs::create_dir_all(&user_bundle).expect("user bundle dir");
+
+        let selected =
+            first_existing_margent_app_bundle(&[system_bundle.clone(), user_bundle.clone()]);
+
+        assert_eq!(selected.as_deref(), Some(user_bundle.as_path()));
     }
 
     #[test]

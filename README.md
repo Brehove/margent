@@ -227,7 +227,7 @@ For a specific thread:
 margent open path/to/file.md --thread thread_123
 ```
 
-If the file sits under an initialized Margent workspace, `margent open` emits and launches a `margent://open?workspace=...&doc=...&thread=...` deep link so the app opens with full review context. For a plain Markdown file outside a workspace, it falls back to `open -a Margent <file>`.
+If the file sits under an initialized Margent workspace, `margent open` emits and launches a `margent://open?workspace=...&doc=...&thread=...` deep link so the app opens with full review context. On macOS it prefers the installed `/Applications/Margent.app` bundle, dispatches the deep link, and then asks the `margent` process to come frontmost. For a plain Markdown file outside a workspace, it falls back to opening the file with Margent directly.
 
 Manual fallback:
 
