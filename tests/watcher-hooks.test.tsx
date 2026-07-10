@@ -950,7 +950,7 @@ describe("workspace file operations", () => {
 });
 
 describe("thread watcher behavior", () => {
-  it("reloads active threads when shared review data changes", async () => {
+  it("reloads active threads after shared review data changes settle", async () => {
     const activeDocument = makeDocument();
     const workspace = makeWorkspace(activeDocument);
     const initialThread = makeThread({
@@ -991,6 +991,14 @@ describe("thread watcher behavior", () => {
     await act(async () => {
       hasExternalThreadChange = true;
       threadsWatchCallback?.();
+    });
+
+    expect(useThreadStore.getState().threads[0]?.id).toBe("thread-1");
+
+    await act(async () => {
+      await new Promise((resolve) =>
+        window.setTimeout(resolve, SETTLED_REVIEW_REFRESH_DELAY_MS + 50),
+      );
     });
 
     await waitFor(() => expect(useThreadStore.getState().threads[0]?.id).toBe("thread-2"));
@@ -1069,7 +1077,7 @@ describe("thread watcher behavior", () => {
     expect(useThreadStore.getState().threads[0]?.messages).toHaveLength(1);
   });
 
-  it("refreshes proposals and active threads from the same review watcher", async () => {
+  it("refreshes proposals and active threads together after review writes settle", async () => {
     const activeDocument = makeDocument();
     const workspace = makeWorkspace(activeDocument);
     const initialThread = makeThread({
@@ -1124,10 +1132,65 @@ describe("thread watcher behavior", () => {
       threadsWatchCallback?.();
     });
 
+    expect(useThreadStore.getState().threads[0]?.title).toBe("Initial thread");
+    expect(useReviewDataStore.getState().proposals[0]?.summary).toBe("Initial proposal");
+
+    await act(async () => {
+      await new Promise((resolve) =>
+        window.setTimeout(resolve, SETTLED_REVIEW_REFRESH_DELAY_MS + 50),
+      );
+    });
+
     await waitFor(() =>
       expect(useThreadStore.getState().threads[0]?.title).toBe("Shared watcher thread"),
     );
     expect(useReviewDataStore.getState().proposals[0]?.summary).toBe("Shared watcher proposal");
+  });
+
+  it("collapses a burst of review events into one settled refresh", async () => {
+    const activeDocument = makeDocument();
+    const workspace = makeWorkspace(activeDocument);
+    let threadsWatchCallback: (() => void) | null = null;
+
+    watchMock.mockImplementation(async (_path, callback) => {
+      threadsWatchCallback = () => callback({});
+      return vi.fn();
+    });
+    invokeMock.mockImplementation(async (command) => {
+      if (command === "load_all_threads" || command === "load_all_proposals") {
+        return [];
+      }
+
+      throw new Error(`Unexpected invoke command: ${command}`);
+    });
+
+    render(createElement(ThreadsHarness, { activeDocument, workspace }));
+
+    await waitFor(() => {
+      expect(invokeMock.mock.calls.filter(([command]) => command === "load_all_threads")).toHaveLength(1);
+      expect(invokeMock.mock.calls.filter(([command]) => command === "load_all_proposals")).toHaveLength(1);
+    });
+    await waitFor(() => expect(watchMock).toHaveBeenCalledTimes(1));
+
+    await act(async () => {
+      threadsWatchCallback?.();
+      threadsWatchCallback?.();
+      threadsWatchCallback?.();
+    });
+
+    expect(invokeMock.mock.calls.filter(([command]) => command === "load_all_threads")).toHaveLength(1);
+    expect(invokeMock.mock.calls.filter(([command]) => command === "load_all_proposals")).toHaveLength(1);
+
+    await act(async () => {
+      await new Promise((resolve) =>
+        window.setTimeout(resolve, SETTLED_REVIEW_REFRESH_DELAY_MS + 50),
+      );
+    });
+
+    await waitFor(() => {
+      expect(invokeMock.mock.calls.filter(([command]) => command === "load_all_threads")).toHaveLength(2);
+      expect(invokeMock.mock.calls.filter(([command]) => command === "load_all_proposals")).toHaveLength(2);
+    });
   });
 
   it("ignores stale shared review data after switching workspaces", async () => {

@@ -161,11 +161,11 @@ export function useReviewData({
           return;
         }
 
-        void refreshReviewData({ notify: true });
         if (settledRefreshTimeoutId !== null) {
           window.clearTimeout(settledRefreshTimeoutId);
         }
-        // Sidecar writes are atomic renames; a settled refresh catches the final file.
+        // Sidecar writes emit several events around an atomic rename. Wait until
+        // they settle so one local mutation does not trigger repeated full scans.
         settledRefreshTimeoutId = window.setTimeout(() => {
           settledRefreshTimeoutId = null;
           if (cancelled) {
